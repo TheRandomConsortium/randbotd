@@ -1,7 +1,7 @@
 # randbotd 🛡️
 ### The Decentralized Trust & Multi-Network SSL Authority Daemon
 
-`randbotd` is a peer-to-peer daemon and Web-of-Trust engine designed to bring TLS/SSL transport security to Handshake (`.hns`), Tor (`.onion`), and clearnet web infrastructure without relying on legacy ICANN Certificate Authority monopolies (Let's Encrypt, DigiCert, Sectigo, etc.).
+`randbotd` is a peer-to-peer daemon and Web-of-Trust engine designed to bring TLS/SSL transport security to Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and clearnet web infrastructure without relying on legacy ICANN Certificate Authority monopolies (Let's Encrypt, DigiCert, Sectigo, etc.).
 
 ---
 
@@ -11,7 +11,7 @@
 Node operators can publish their own Certificate Authority (CA) on the network:
 * **Custom Subject Metadata:** Define Subject Name, Emissor, Organization (O), Organizational Unit (OU).
 * **Cryptographic Agility:** Configurable key algorithms (RSA 4096, ECDSA P-384, Ed25519) and signature parameters.
-* **Multi-Network Support:** Serves Handshake (`.hns`), Tor (`.onion`), and traditional clearnet domains.
+* **Multi-Network Support:** Serves Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and traditional clearnet domains.
 * **P2P Propagation:** CAs and public cert chains are broadcast to the network alongside reputation metrics.
 
 ### 2. Proof-of-Work (PoW) Ponderated Voting (`Vote TW / UTW`)
@@ -34,7 +34,7 @@ Domain owners request TLS certificates via an ACME-compatible endpoint:
 ## 🔌 Ecosystem Integration
 
 ### Caddy CertMagic Plugin
-* A native `randbotd` plugin for Caddy's `certmagic` library, allowing web servers to automatically request, install, and renew Handshake, Onion, and clearnet SSL certificates via `randbotd` ACME endpoints.
+* A native `randbotd` plugin for Caddy's `certmagic` library, allowing web servers to automatically request, install, and renew Handshake, Onion, Garlic (I2P), and clearnet SSL certificates via `randbotd` ACME endpoints.
 
 ### Public Transparency Index (`bullshiters.randºm`)
 * A public cryptographic shaming portal indexing non-randbotd domains and Certificate Authorities deemed Untrustworthy (UTW) by network consensus.
