@@ -14,16 +14,21 @@ Node operators can publish their own Certificate Authority (CA) on the network:
 * **Multi-Network Support:** Serves Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and traditional clearnet domains.
 * **P2P Propagation:** CAs and public cert chains are broadcast to the network alongside reputation metrics.
 
-### 2. Proof-of-Work (PoW) Ponderated Voting (`Vote TW / UTW`)
-Nodes cast votes rating domains and their underlying CAs as **TW** (Trustworthy) or **UTW** (Untrustworthy):
-* **1 Node = 1 Vote per Domain:** Prevents basic spamming.
-* **PoW Ponderation:** Every vote requires a valid Proof-of-Work challenge.
-* **Network Behavior Audit:** The network evaluates node voting patterns. Falsifying PoW or submitting malicious votes results in immediate vote rejection and permanent weighting/reputation penalties against the node.
+### 2. Lazy Evaluation & Weighted Reputation Engine (`Vote TW / UTW`)
+Nodes cast votes rating domains as **TW** (Trustworthy) or **UTW** (Untrustworthy), which are lazily evaluated upon network query:
+* **1 Active Vote per Node (Dynamic Mind-Changing)**: Each node holds exactly 1 active vote per domain to prevent vote-stuffing. However, a node can change its mind at any time (e.g. flipping a vote from UTW to TW if a domain reforms, or vice-versa).
+* **PoW & Node Behavior Ponderation**: Every vote requires a valid Proof-of-Work challenge and is weighted against the voting node's historical behavior score. Malicious review-bomber nodes lose voter reputation, neutralizing their voting power across the network.
+* **CA Rating Propagation**: A Certificate Authority's reputation score is calculated dynamically as the **weighted average of the trust scores of all domains issued under its authority**.
+* **Bi-Directional Image Cleaning**:
+  * **CA Image Cleaning**: A CA can clean and elevate its overall network reputation by actively revoking/banning UTW domains hosted under its certificates.
+  * **Domain Image Cleaning**: A domain elevates its reputation score by acquiring positive TW votes or when malicious UTW review-bomber nodes lose voter weight.
 
-### 3. ACME-Like Certificate Issuance (`GetCert`)
+### 3. Fair-Band ACME Certificate Allocation (`GetCert`)
 Domain owners request TLS certificates via an ACME-compatible endpoint:
-* **Randomized Allocation:** Certificates are issued at random from a pool of CAs exceeding the network's Trustworthy (TW) threshold.
-* **Zero Single Point of Failure:** Prevents targeted revocation or censorship of individual domains by a single CA.
+* **50% Baseline Initialization**: Newly registered domains and CAs initialize at a neutral **50% baseline score**.
+* **Randomized Fair-Band Matching ($\pm \Delta$)**: Rather than assigning a fixed CA, `GetCert` randomly selects a Certificate Authority from the pool of CAs whose reputation score matches the domain's score within a dynamic confidence window ($\pm \Delta$).
+* **Dynamic Confidence Threshold ($\Delta$)**: The tolerance window ($\Delta$) scales dynamically based on voting volume (e.g. votes cast on the domain vs votes on the CA). This distinguishes unproven 50% domains (few votes) from well-established 50% domains or proven 2% UTW malicious domains (high vote volume).
+* **CA-Configurable Risk Floor**: A CA operator may voluntarily lower their minimum accepted reputation threshold (e.g. opting to issue certificates to unproven or lower-tier 10%–49% domains). This allows CAs to host high-risk or radical censorship-resistant domains willingly, while taking on the risk that hosting UTW domains will lower the CA's overall public rating.
 
 ### 4. Proactive Early Warning & Inbox System
 * **Domain Owner Notifications:** If a Trustworthy (TW) domain is hosted under a CA that gets flagged as Untrustworthy (UTW), `randbotd` sends an inbox alert recommending early certificate re-issuance under a clean CA pool.
