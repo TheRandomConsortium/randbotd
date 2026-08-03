@@ -25,9 +25,13 @@ Nodes cast votes rating domains as **TW** (Trustworthy) or **UTW** (Untrustworth
 
 ### 3. Fair-Band ACME Certificate Allocation (`GetCert`)
 Domain owners request TLS certificates via an ACME-compatible endpoint:
-* **50% Baseline Initialization**: Newly registered domains and CAs initialize at a neutral **50% baseline score**.
+* **50% Baseline Initialization**: Newly registered domains and CAs initialize at a neutral **50% baseline score** with 0 votes ($\Delta = \pm 50\%$).
 * **Randomized Fair-Band Matching ($\pm \Delta$)**: Rather than assigning a fixed CA, `GetCert` randomly selects a Certificate Authority from the pool of CAs whose reputation score matches the domain's score within a dynamic confidence window ($\pm \Delta$).
-* **Dynamic Confidence Threshold ($\Delta$)**: The tolerance window ($\Delta$) scales dynamically based on voting volume (e.g. votes cast on the domain vs votes on the CA). This distinguishes unproven 50% domains (few votes) from well-established 50% domains or proven 2% UTW malicious domains (high vote volume).
+* **Logarithmic Dynamic Confidence Engine ($\Delta$)**: The tolerance window ($\Delta$) decays along a logarithmic curve starting from $\pm 50\%$ as vote volume increases relative to total active network nodes ($N_{\text{active\_nodes}}$):
+  * **Domain $\Delta$**: $\Delta_{\text{domain}} = \pm 50\% \times f\left(\frac{N_{\text{votes}}}{N_{\text{active\_nodes}}}\right)$, dropping rapidly at first and narrowing toward the domain's true consensus rating.
+  * **CA Ensemble $\Delta$**: Evaluated across the ensemble of domains issued under the CA using the 75th percentile (P75) vote volume: $\Delta_{\text{CA}} = \pm 50\% \times f\left(\frac{\text{P75}(\{N_{\text{votes}}(\text{domain}_i)\})}{N_{\text{active\_nodes}}}\right)$.
+  * **Boundary Clipping & Non-Negative Floor**: Scores are strictly clipped to $[0\%, 100\%]$ and $\Delta \ge 0$.
+  * **Dynamic Lazy-Evaluation Expansion**: On lazy evaluation, as total active nodes ($N_{\text{active\_nodes}}$) expand, $\Delta$ naturally widens for stale entities until new votes solidify their position.
 * **CA-Configurable Risk Floor**: A CA operator may voluntarily lower their minimum accepted reputation threshold (e.g. opting to issue certificates to unproven or lower-tier 10%–49% domains). This allows CAs to host high-risk or radical censorship-resistant domains willingly, while taking on the risk that hosting UTW domains will lower the CA's overall public rating.
 
 ### 4. Proactive Early Warning & Inbox System

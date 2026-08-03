@@ -1,0 +1,115 @@
+# 🗺️ `randbotd` Specification & Functionality Tracker
+
+This document tracks all planned, ongoing, and completed feature modules, architectural primitives, and ecosystem integrations for `randbotd`.
+
+---
+
+## 📊 Feature Status Legend
+
+| Status Icon | Meaning |
+| :---: | :--- |
+| 🟢 | **Completed & Verified** |
+| 🟡 | **In Active Development** |
+| 🔴 | **Infrastructure / Planned** |
+| ⚪ | **Conceptual / Specification Draft** |
+
+---
+
+## 🏗️ 1. Core Daemon & P2P Network Infrastructure
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `NET-01` | **Ed25519 Node Identity** | Node keypair generation, cryptographic identity persistence, and handshake framing. | 🔴 |
+| `NET-02` | **Multi-Hop P2P Gossip Engine** | Multi-hop gossip protocol (unlike single-hop designs) for resilient, network-wide propagation of votes and CA declarations. | 🔴 |
+| `NET-03` | **Multi-Network Routing** | Support for peer discovery across Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and Clearnet IPs. | 🔴 |
+| `NET-04` | **Local Embedded Database** | Fast transactional storage (Sled/RocksDB/SQLite) for local CA state, votes, and certificates. | 🔴 |
+| `NET-05` | **Full History Catch-Up Protocol** | Anti-entropy sync protocol enabling offline peers to retrieve missed event logs, CA root announcements, and vote chains without requiring a tokenized blockchain (uses append-only DAG/event log; coinless/fungibility-free). | 🔴 |
+| `NET-06` | **Infrastructure / Headless Node Mode (`--mode=headless`)** | Daemon flag for non-interactive nodes (e.g., home servers for Caddy TLS requests or CLI CAs). Headless nodes relay P2P messages and verify PoW, but are strictly prohibited from casting votes, excluded from active voter pools ($N_{\text{active\_voter\_nodes}}$), and excluded from network voter behavioral heuristics. | 🔴 |
+
+---
+
+## 🔑 2. Root & Intermediate CA Engine (`Publish CA`)
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `CA-01` | **Custom Subject Metadata Engine** | Configurable creation of root/intermediate CAs with custom Subject Name, Emissor, O, and OU fields. | 🔴 |
+| `CA-02` | **Cryptographic Agility Suite** | Multi-algorithm key generation and certificate signing: RSA-4096, ECDSA P-384, and Ed25519. | 🔴 |
+| `CA-03` | **Multi-Network Domain Proofs** | Verification of domain control via DNS TXT, Handshake record, Tor HTTP/TLS-ALPN, and I2P LeaseSets. | 🔴 |
+| `CA-04` | **P2P Cert Chain Broadcasting** | Automated broadcast of published CAs, intermediate cert chains, and CRLs across the P2P swarm. | 🔴 |
+| `CA-05` | **X.509 Certificate Builder** | Standard-compliant X.509 v3 certificate builder with custom extensions for WoT signatures. | 🔴 |
+| `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🔴 |
+| `CA-07` | **Bad-Domain Purge Engine** | Allows CAs to actively revoke/purge UTW or abusive domains (enabling affected legitimate domains to perform early renewal/migration). | 🔴 |
+
+---
+
+## ⚖️ 3. Reputation & Web-of-Trust Engine (`Vote TW / UTW`)
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `REP-01` | **Proof-of-Work Challenge Engine** | Dynamic PoW puzzle generator (SHA-256 / Equihash) required for vote submission. | 🔴 |
+| `REP-02` | **1-Vote-Per-Node Dynamic Voting** | State machine enforcing 1 active vote per node per domain with real-time mind-changing support. | 🔴 |
+| `REP-03` | **Behavioral Score & Weight Ponderation** | Historical voter reputation engine scaling down voting power for detected review-bombers/Sybil nodes. | 🔴 |
+| `REP-04` | **Lazy Evaluation Engine** | On-demand computation of domain/CA trust scores and $\Delta$ windows. Automatically rescales $\Delta$ when active network node count $N_{\text{active\_nodes}}$ expands. | 🔴 |
+| `REP-05` | **CA Rating Propagation Engine** | Calculation of a CA's public rating as the weighted average of trust scores of all issued domains. | 🔴 |
+| `REP-06` | **Bi-Directional Image Cleaning** | Mechanisms for CAs to boost rating via domain revocations, and domains to recover from review-bomb strikes. | 🔴 |
+
+---
+
+## 🎯 4. Fair-Band ACME Certificate Allocation (`GetCert`)
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `ACME-01` | **ACME v2 Protocol Adapter** | RFC 8555 compliant endpoints (`/acme/directory`, `/acme/new-order`, `/acme/finalize`). | 🔴 |
+| `ACME-02` | **50% Baseline Initializer** | Initializing new domains and CAs at a neutral 50% baseline score with 0 votes ($\Delta = \pm 50\%$). | 🔴 |
+| `ACME-03` | **Randomized Fair-Band Matching ($\pm \Delta$)** | Matching domain cert requests to CA pools within dynamic confidence tolerance window ($\pm \Delta$). | 🔴 |
+| `ACME-04` | **Logarithmic Dynamic Delta ($\Delta$) Engine for CA Matching** | Used specifically during certificate generation (`GetCert`) to compute matching tolerance ($\pm \Delta$) between domain and candidate CAs. Starts at $\pm 50\%$ for 0 votes and decays logarithmically based on vote count vs $N_{\text{active\_nodes}}$ (domain votes for domain $\Delta$; P75 domain vote ensemble for CA $\Delta$). Clipped at $[0\%, 100\%]$ and $\Delta \ge 0$, naturally widening on lazy evaluation as network node count grows. | 🔴 |
+| `ACME-05` | **CA Operator Risk Floor Configurator** | Allowing CAs to set custom minimum reputation acceptance thresholds for domain issuance. | 🔴 |
+| `ACME-06` | **Emergency Default Fallback CA** | Provisions temporary, short-TTL certificates if a randomly matched P2P CA is currently offline, ensuring zero downtime while waiting for full issuance. | 🔴 |
+| `ACME-07` | **`--only-online` Filter Selection** | Client flag allowing domain owners to restrict fair-band matching strictly to active/online CAs for immediate cert issuance (lowers pool size). | 🔴 |
+
+---
+
+## 🌐 5. Out-Of-Net Trust Substitution & Foreign Certificate Engine
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `OUT-01` | **System Trust Store Substitution** | Engine allowing `randbotd` to substitute or augment default OS / browser trusted root certificate stores. | 🔴 |
+| `OUT-02` | **Foreign Certificate Ingestion** | Support for ingesting self-signed certificates, Caddy internal CA certs, and traditional ICANN certificates. | 🔴 |
+| `OUT-03` | **`out-of-net` Cryptographic Marking** | Mandatory tagging and isolation of foreign/ICANN/self-signed certs as `out-of-net` to distinguish them from native peer-voted `randbotd` CAs. | 🔴 |
+
+---
+
+## 📬 6. Proactive Early Warning & Inbox System
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `NOTIF-01` | **Domain Owner Inbox Alerts** | Automated P2P notification sent to TW domain owners when their hosting CA drops into UTW status. | 🔴 |
+| `NOTIF-02` | **CA Operator Strike Notifications** | Alerting CA operators immediately when an issued domain receives an UTW strike. | 🔴 |
+| `NOTIF-03` | **Encrypted P2P Messaging Queue** | Asynchronous end-to-end encrypted inbox messaging channel between network nodes. | 🔴 |
+
+---
+
+## 🔌 7. Ecosystem Integration & Public Tools
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `ECO-01` | **Caddy CertMagic Plugin** | Native Golang/Caddy plugin enabling seamless TLS auto-renewal via `randbotd` ACME endpoints. | 🔴 |
+| `ECO-02` | **`bullshiters.randºm` Public Portal** | Public cryptographic shaming website indexing malicious non-randbotd domains and UTW CAs. | 🔴 |
+| `ECO-03` | **`randbotctl` CLI & CA Command Center** | Command-line interface for daemon control, CA publication, voting, domain purges, and reputation lookup. | 🔴 |
+| `ECO-04` | **gRPC & REST Daemon APIs** | Local API endpoints for system integrations and client control. | 🔴 |
+
+---
+
+## 📈 Roadmap Execution Order
+
+```mermaid
+graph TD
+    A["Phase 0: Repository & Infrastructure Setup"] --> B["Phase 1: Cryptographic Primitives, Multi-Hop P2P & History Sync"]
+    B --> C["Phase 2: Logarithmic Delta Engine (Domains & P75 CAs)"]
+    C --> D["Phase 3: CA Command Center & Domain Purge Engine"]
+    D --> E["Phase 4: Reputation & Web-of-Trust Engine"]
+    E --> F["Phase 5: ACME Server, Fair-Band Matching & Offline Fallbacks"]
+    F --> G["Phase 6: Out-of-Net Store Substitution & Foreign Cert Marking"]
+    G --> H["Phase 7: Early Warning System & Caddy Plugin"]
+    H --> I["Phase 8: Public Shaming Index (bullshiters.randºm)"]
+```
