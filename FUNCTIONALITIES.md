@@ -110,6 +110,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `PAY-03` | **Escrow-less Fraud Prevention** | Cryptographic proof-of-issuance smart contract settlement ensuring fee is paid atomically upon cert receipt without third-party escrows. | 🔴 |
 | `PAY-04` | **Account Price Ceiling & Balance Protection** | Configurable `account_price_ceiling` preventing requests to CAs priced above ceiling, with auto-matching restricted to balance $\ge$ fee. | 🔴 |
 | `PAY-05` | **`--free-only` Client Override Flag** | Client flag enforcing strict 0-cost / free CA matching on a per-call basis regardless of account balance or price ceiling. | 🔴 |
+| `PAY-06` | **Anti-Purge Fraud Game Theory Engine** | Enforces mathematical purge pricing: `Purge Cost = Remaining Prorated Fee - Reputational Cost Deduction`. CAs purging UTW-heavy bad domains purge for free (0 cost) due to high reputational deductions; early purging of clean domains requires refunding the remaining prorated fee. Invalid purges bypassing payment are rejected by P2P consensus, preserving cert validity. | 🔴 |
 
 ---
 

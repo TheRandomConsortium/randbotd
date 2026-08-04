@@ -69,6 +69,9 @@ In traditional P2P networks, non-voting or headless nodes are often labeled as "
 * **Free-Market Pricing Dynamics**: Being cypherpunks does not require living as hobos or relying on corporate charity. CA operators may voluntarily attach service fees (in Monero / XMR) to certificate issuance while letting open market competition dictate pricing. While free/0-cost issuance will still rule the world, sustainable infrastructure requires economic choice.
 * **In-Bot Monero Wallet & Escrow-Less Settlement**: Automated P2P fee settlement directly between in-bot Monero addresses using cryptographic proof-of-issuance smart contracts, eliminating fraud without third-party escrows.
 * **Client Sovereignty & Price Protection**: Domain owners retain absolute control via configurable `account_price_ceiling` settings, wallet balance safeguards, and `--free-only` flags to enforce zero-cost CA matching on demand.
+* **Anti-Purge Fraud Game Theory & P2P Consensus Enforcement**: To eliminate "Purge Before TTL Fraud" (where a paid CA takes a fee and arbitrarily revokes a certificate), the cost for a CA to purge an active certificate before TTL expiration is mathematically enforced by the network:
+  $$\text{Purge Cost} = \text{Remaining Prorated Fee} - \text{Reputational Cost Deduction}$$
+  If a domain receives heavy UTW strikes from weighted trusted nodes, high reputational cost deductions make image-cleaning purges **free** for the CA. However, purging a clean domain before TTL expiration requires refunding the remaining prorated fee. If a rogue CA modifies daemon code to bypass fee settlement, P2P network consensus **rejects the purge event broadcast**, keeping the domain's certificate valid across all peer nodes locally.
 
 ---
 
