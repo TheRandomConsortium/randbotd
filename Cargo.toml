@@ -1,0 +1,23 @@
+[package]
+name = "randbotd"
+version = "0.1.0"
+edition = "2021"
+authors = ["The Random Consortium"]
+description = "Random Consortium's Certificate Bot Daemon"
+license = "MPL-2.0"
+build = "build.rs"
+
+[dependencies]
+
+[package.metadata.deb]
+maintainer = "The Random Consortium"
+copyright = "2026, The Random Consortium <MPL-2.0>"
+extended-description = "Decentralized Trust & Multi-Network SSL Authority Daemon"
+depends = "$auto"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/randbotd", "usr/bin/randbotd", "755"],
+    ["debian/randbotd.service", "lib/systemd/system/randbotd.service", "644"],
+]
+systemd-units = { unit-name = "randbotd" }

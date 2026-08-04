@@ -1,0 +1,16 @@
+[Unit]
+Description=Random Consortium's Certificate Bot Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=randbotd
+Group=randbotd
+ExecStart=/usr/bin/randbotd
+Restart=on-failure
+WorkingDirectory=/var/lib/randbotd
+StateDirectory=randbotd
+ConfigurationDirectory=randbotd
+
+[Install]
+WantedBy=multi-user.target

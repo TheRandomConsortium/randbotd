@@ -1,0 +1,28 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Create group randbotd if it doesn't exist
+        if ! getent group randbotd >/dev/null 2>&1; then
+            groupadd -r randbotd
+        fi
+
+        # Create user randbotd if it doesn't exist
+        if ! getent passwd randbotd >/dev/null 2>&1; then
+            useradd -r -g randbotd -d /var/lib/randbotd -s /bin/false -c "randbotd daemon user" randbotd
+        fi
+
+        # Create directories and assign ownership
+        mkdir -p /var/lib/randbotd /etc/randbotd
+        chown -R randbotd:randbotd /var/lib/randbotd /etc/randbotd
+        chmod 750 /var/lib/randbotd /etc/randbotd
+
+        # Reload systemd configuration
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload || true
+        fi
+    ;;
+esac
+
+exit 0
