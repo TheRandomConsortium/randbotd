@@ -53,6 +53,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `REP-04` | **Lazy Evaluation Engine** | On-demand computation of domain/CA trust scores and $\Delta$ windows. Automatically rescales $\Delta$ when active network node count $N_{\text{active\_nodes}}$ expands. | 🔴 |
 | `REP-05` | **CA Rating Propagation Engine** | Calculation of a CA's public rating as the weighted average of trust scores of all issued domains. | 🔴 |
 | `REP-06` | **Bi-Directional Image Cleaning** | Mechanisms for CAs to boost rating via domain revocations, and domains to recover from review-bomb strikes. | 🔴 |
+| `REP-07` | **Heuristic Cluster Ponderation Penalties** | Detects behavioral collusion rings and suspicious voting correlation. Invalid network interactions (e.g. fraudulent purges) degrade the voter ponderation of the offending node AND all heuristically linked cluster nodes. | 🔴 |
 
 ---
 
@@ -111,6 +112,18 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `PAY-04` | **Account Price Ceiling & Balance Protection** | Configurable `account_price_ceiling` preventing requests to CAs priced above ceiling, with auto-matching restricted to balance $\ge$ fee. | 🔴 |
 | `PAY-05` | **`--free-only` Client Override Flag** | Client flag enforcing strict 0-cost / free CA matching on a per-call basis regardless of account balance or price ceiling. | 🔴 |
 | `PAY-06` | **Anti-Purge Fraud Game Theory Engine** | Enforces mathematical purge pricing: `Purge Cost = Remaining Prorated Fee - Reputational Cost Deduction`. CAs purging UTW-heavy bad domains purge for free (0 cost) due to high reputational deductions; early purging of clean domains requires refunding the remaining prorated fee. Invalid purges bypassing payment are rejected by P2P consensus, preserving cert validity. | 🔴 |
+
+---
+
+## 🛡️ 9. Classical Attack Mitigation Matrix
+
+| Attack Vector | Threat Description | Defense & Cryptographic Countermeasure |
+| :--- | :--- | :--- |
+| **Bait-and-Switch** | CA delivers incorrect cert type, lower TTL, or weaker algorithm after payment. | Covered by **Atomic Smart Contract Settlement** (`PAY-03`). Contract specifies exact cert metadata, parameters, and TTL; funds release only upon cryptographic proof of matching cert. |
+| **Reputation Farming / Sybil** | Malicious entities spawn fake nodes to inflate domain/CA trust ratings artificially. | Covered by **Behavioral Ponderation & Cluster Penalties** (`REP-03`/`REP-07`). 1 vote per node, PoW puzzle verification, and heuristic cluster ponderation degradation for correlated voting rings. |
+| **Vendor Lock-In** | Paid CAs attempt to force domain owners into recurring proprietary renewals. | Covered by **Pool Renewal & Price Ceilings** (`ACME-03`/`PAY-04`). Renewals are matched dynamically against the full fair-band CA pool with client-side `--free-only` and `account_price_ceiling` enforcement. |
+| **Purge Extortion / Rug-Pull** | CA takes payment then revokes certificate prematurely without justification. | Covered by **Anti-Purge Game Theory & Consensus Enforcement** (`PAY-06`). Prorated fee refunds are enforced mathematically; invalid purges are rejected by P2P consensus, keeping certs valid locally. |
+| **Collusion / Cluster Manipulation** | Coordinated node ring voting deceptively to shield a corrupt CA's rating. | Covered by **Heuristic Cluster Ponderation Penalties** (`REP-07`). Invalid network actions degrade the voter weight of the offending node AND all behaviorally correlated cluster nodes. |
 
 ---
 

@@ -72,6 +72,11 @@ In traditional P2P networks, non-voting or headless nodes are often labeled as "
 * **Anti-Purge Fraud Game Theory & P2P Consensus Enforcement**: To eliminate "Purge Before TTL Fraud" (where a paid CA takes a fee and arbitrarily revokes a certificate), the cost for a CA to purge an active certificate before TTL expiration is mathematically enforced by the network:
   $$\text{Purge Cost} = \text{Remaining Prorated Fee} - \text{Reputational Cost Deduction}$$
   If a domain receives heavy UTW strikes from weighted trusted nodes, high reputational cost deductions make image-cleaning purges **free** for the CA. However, purging a clean domain before TTL expiration requires refunding the remaining prorated fee. If a rogue CA modifies daemon code to bypass fee settlement, P2P network consensus **rejects the purge event broadcast**, keeping the domain's certificate valid across all peer nodes locally.
+* **Invalid Interaction & Heuristic Cluster Penalties**: Any invalid network interaction—such as broadcasting a fraudulent purge without paying required refunds or emitting malformed P2P actions—degrades the voter ponderation (behavioral weight) of the offending node AND all peer nodes identified by heuristics as a correlated cluster (nodes displaying suspicious voting patterns towards the CA's domains or similar behavioral signatures).
+* **Cryptographic Immunity to Classical Attacks**:
+  * **Bait-and-Switch**: Prevented by atomic smart-contract settlement specifying exact cert algorithms, metadata, and TTL before fee release.
+  * **Reputation Farming / Sybil**: Neutralized by PoW verification, 1-vote-per-node limits, and dynamic behavioral ponderation.
+  * **Vendor Lock-in**: Rendered impossible by design because certificate renewals are allocated against the dynamic fair-band CA pool under client-enforced price ceilings (`--free-only` / `account_price_ceiling`).
 
 ---
 
