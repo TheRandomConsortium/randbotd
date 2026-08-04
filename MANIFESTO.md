@@ -57,11 +57,18 @@ In traditional P2P networks, non-voting or headless nodes are often labeled as "
 * **Offline CA Fallback & Immediate Selection**: To ensure zero downtime when a fair-band matched P2P CA is offline, `randbotd` provides emergency default temporary certificates (short-TTL) or allows clients to opt for `--only-online` CA pool matching for immediate cert delivery.
 * **CA Command Center & Active Purging**: CA operators maintain control planes to inspect domain metrics and actively purge UTW domains to defend CA network image (prompting affected domains to perform early renewal).
 
-### 4. Radical Accountability & Out-Of-Net Trust Substitution
+### 4. Radical Accountability, Out-Of-Net Isolation & Second-Hand Recruitment
 * **Out-Of-Net Certification Isolation**: `randbotd` can substitute local system certificate stores. External sources—including self-signed certs, Caddy internal CAs, and legacy ICANN CAs—are accepted but strictly marked as **`out-of-net`** to differentiate them from peer-voted `randbotd` native CAs.
-* **CA Image Cleaning**: CAs elevate their network trust rating by revoking certificates for malicious or UTW-flagged domains.
-* **Domain Image Cleaning**: Domains elevate their standing by accumulating positive TW consensus and shedding malicious review-bomb strikes.
-* **Cryptographic Shaming (`bullshiters.randºm`)**: Non-randbotd CAs and abusive domains flagged as Untrustworthy (UTW) by network consensus are publicly indexed on a cryptographic shaming portal.
+* **CA & Domain Image Cleaning**: CAs elevate their rating by purging abusive domains; domains recover standing by accumulating positive consensus and shedding malicious strikes.
+* **Cryptographic Shaming & Recruitment Portal (`bullshiters.randºm`)**: Non-randbotd CAs and abusive `out-of-net` domains flagged as Untrustworthy (UTW) by network consensus are publicly indexed on a cryptographic shaming portal. It operates under an unyielding manifesto:
+  > *"This list has not been emitted by any central authority. We do not apologize, we do not revoke network consensus. To clean your image, just migrate to randbotd: if you use your same keys you will automatically be synced and you can start kicking bad domains and participate in real open and public encryption. Internet by the people, for the people."*
+  
+  This portal serves as a second-hand recruitment engine for both legacy CAs (*"ok, let's try that cypherpunk shit"*) and domain owners to adopt peer-voted Web-of-Trust consensus.
+
+### 5. Cypherpunk Market Economics: "Being Cypherpunks Doesn't Mean Being Hobos"
+* **Free-Market Pricing Dynamics**: Being cypherpunks does not require living as hobos or relying on corporate charity. CA operators may voluntarily attach service fees (in Monero / XMR) to certificate issuance while letting open market competition dictate pricing. While free/0-cost issuance will still rule the world, sustainable infrastructure requires economic choice.
+* **In-Bot Monero Wallet & Escrow-Less Settlement**: Automated P2P fee settlement directly between in-bot Monero addresses using cryptographic proof-of-issuance smart contracts, eliminating fraud without third-party escrows.
+* **Client Sovereignty & Price Protection**: Domain owners retain absolute control via configurable `account_price_ceiling` settings, wallet balance safeguards, and `--free-only` flags to enforce zero-cost CA matching on demand.
 
 ---
 

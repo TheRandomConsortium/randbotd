@@ -39,6 +39,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `CA-05` | **X.509 Certificate Builder** | Standard-compliant X.509 v3 certificate builder with custom extensions for WoT signatures. | 🔴 |
 | `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🔴 |
 | `CA-07` | **Bad-Domain Purge Engine** | Allows CAs to actively revoke/purge UTW or abusive domains (enabling affected legitimate domains to perform early renewal/migration). | 🔴 |
+| `CA-08` | **Configurable Certificate Parameters (Custom TTL)** | Allows CAs to specify custom issuance parameters, such as custom certificate validity/TTL (Time-To-Live). | 🔴 |
 
 ---
 
@@ -100,6 +101,18 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 
 ---
 
+## 💸 8. Monero (XMR) Decentralized Market & Escrow-less Settlement Engine
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `PAY-01` | **CA Optional Service Fee Publisher** | Allows CAs to optionally publish a service fee (in XMR) alongside their issuance parameters. Market-driven pricing (default free). | 🔴 |
+| `PAY-02` | **In-Bot Monero Wallet Integration** | Embedded Monero wallet module for automated fee deductions directly to the issuing CA's address communicated during cert negotiation. | 🔴 |
+| `PAY-03` | **Escrow-less Fraud Prevention** | Cryptographic proof-of-issuance smart contract settlement ensuring fee is paid atomically upon cert receipt without third-party escrows. | 🔴 |
+| `PAY-04` | **Account Price Ceiling & Balance Protection** | Configurable `account_price_ceiling` preventing requests to CAs priced above ceiling, with auto-matching restricted to balance $\ge$ fee. | 🔴 |
+| `PAY-05` | **`--free-only` Client Override Flag** | Client flag enforcing strict 0-cost / free CA matching on a per-call basis regardless of account balance or price ceiling. | 🔴 |
+
+---
+
 ## 📈 Roadmap Execution Order
 
 ```mermaid
@@ -112,4 +125,5 @@ graph TD
     F --> G["Phase 6: Out-of-Net Store Substitution & Foreign Cert Marking"]
     G --> H["Phase 7: Early Warning System & Caddy Plugin"]
     H --> I["Phase 8: Public Shaming Index (bullshiters.randºm)"]
+    I --> J["Phase 9: Monero Decentralized Market & Escrow-less Settlement Engine"]
 ```
