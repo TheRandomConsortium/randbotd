@@ -19,7 +19,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
-| `NET-01` | **Ed25519 Node Identity** | Node keypair generation, cryptographic identity persistence, and handshake framing. | 🔴 |
+| `NET-01` | **Ed25519 Node Identity** | Node keypair generation, cryptographic identity persistence, and handshake framing. | 🟢 |
 | `NET-02` | **Multi-Hop P2P Gossip Engine** | Multi-hop gossip protocol (unlike single-hop designs) for resilient, network-wide propagation of votes and CA declarations. | 🔴 |
 | `NET-03` | **Multi-Network Routing** | Support for peer discovery across Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and Clearnet IPs. | 🔴 |
 | `NET-04` | **Local Embedded Database** | Fast transactional storage (Sled/RocksDB/SQLite) for local CA state, votes, and certificates. | 🔴 |
