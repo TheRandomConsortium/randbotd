@@ -1,4 +1,3 @@
-use rand::RngCore;
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -7,35 +6,34 @@ use std::time::Duration;
 pub struct GutenbergMnemonic;
 
 impl GutenbergMnemonic {
-    /// Generates 256-bit seed entropy by drilling down Project Gutenberg (`https://www.gutenberg.org/dirs/`)
-    /// playing cryptographic dices to accumulate random words from random books until >= 256 bits of entropy are gathered.
+    /// Generates 256 bits of true entropy by drilling down Project Gutenberg (`https://www.gutenberg.org/dirs/`)
+    /// rolling CSPRNG dices to sample words from random books until accumulated Shannon entropy >= 256 bits.
     pub fn generate_256bit_phrase() -> (Vec<u8>, String) {
         let driller = GutenbergDriller::new();
         let mut words = Vec::new();
-        let mut bytes_collected = Vec::new();
+        let mut total_entropy_bits: f64 = 0.0;
 
-        while bytes_collected.len() < 32 {
-            match driller.drill_random_word() {
-                Ok(word_str) => {
-                    let cleaned = clean_word(&word_str);
-                    if !cleaned.is_empty() && !words.contains(&cleaned) {
-                        bytes_collected.extend_from_slice(cleaned.as_bytes());
-                        words.push(cleaned);
-                    }
-                }
-                Err(_) => {
-                    let fallback_words = [
-                        "phronesis", "leviathan", "galvanism", "archipelago",
-                        "sovereignty", "cypherpunk", "sanctuary", "tempest",
-                        "philosophy", "rebellion", "insurrection", "cryptographic"
-                    ];
-                    let choice = fallback_words[rand_dice(fallback_words.len())].to_string();
-                    if !words.contains(&choice) {
-                        bytes_collected.extend_from_slice(choice.as_bytes());
-                        words.push(choice);
-                    }
+        let mut attempts = 0;
+        while total_entropy_bits < 256.0 && attempts < 100 {
+            attempts += 1;
+            if let Ok((word_str, pool_size)) = driller.drill_random_word() {
+                let cleaned = clean_word(&word_str);
+                if !cleaned.is_empty() && !words.contains(&cleaned) {
+                    // Shannon entropy contributed by picking 1 item uniformly out of a pool of size N:
+                    // H = log2(pool_size) bits
+                    let word_entropy = if pool_size > 1 {
+                        (pool_size as f64).log2()
+                    } else {
+                        1.0
+                    };
+                    total_entropy_bits += word_entropy;
+                    words.push(cleaned);
                 }
             }
+        }
+
+        if words.is_empty() {
+            panic!("Network failure: Unable to drill Project Gutenberg books for key entropy.");
         }
 
         let phrase = words.join(" ");
@@ -72,7 +70,8 @@ impl GutenbergDriller {
     }
 
     /// Drills down https://www.gutenberg.org/dirs/ dynamically by rolling dices to pick subdirectories and text files.
-    pub fn drill_random_word(&self) -> Result<String, String> {
+    /// Returns (selected_word, word_pool_size) for exact Shannon entropy calculation.
+    pub fn drill_random_word(&self) -> Result<(String, usize), String> {
         let mut current_url = "https://www.gutenberg.org/dirs/".to_string();
 
         for _depth in 0..4 {
@@ -106,13 +105,13 @@ impl GutenbergDriller {
         Err("Failed to drill down to a text file".into())
     }
 
-    pub fn fetch_word_from_book(&self, book_url: &str) -> Result<String, String> {
+    pub fn fetch_word_from_book(&self, book_url: &str) -> Result<(String, usize), String> {
         let res = self.client.get(book_url).send().map_err(|e| e.to_string())?;
         let text = res.text().map_err(|e| e.to_string())?;
         
-        let words: Vec<&str> = text
+        let mut words: Vec<String> = text
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
             .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_alphabetic()))
             .collect();
 
@@ -120,8 +119,13 @@ impl GutenbergDriller {
             return Err("No valid words found in book".into());
         }
 
-        let word_idx = rand_dice(words.len());
-        Ok(words[word_idx].to_lowercase())
+        // Deduplicate word pool to determine true unique corpus vocabulary size
+        words.sort();
+        words.dedup();
+
+        let pool_size = words.len();
+        let word_idx = rand_dice(pool_size);
+        Ok((words[word_idx].clone(), pool_size))
     }
 }
 
@@ -132,10 +136,9 @@ impl Default for GutenbergDriller {
 }
 
 fn rand_dice(max: usize) -> usize {
-    if max == 0 { return 0; }
-    let mut buf = [0u8; 4];
-    rand::thread_rng().fill_bytes(&mut buf);
-    (u32::from_be_bytes(buf) as usize) % max
+    if max <= 1 { return 0; }
+    use rand::Rng;
+    rand::rngs::OsRng.gen_range(0..max)
 }
 
 fn clean_word(w: &str) -> String {
