@@ -6,7 +6,7 @@ This document tracks minor maintenance tasks, refactoring needs, infrastructure 
 
 ## 🧹 Active Chores & Technical Debt
 
-*No active chores or technical debt currently logged.*
+* [ ] **`NET-02` Gossip Router Seen Cache Eviction**: Implement timestamp-bounded eviction for `GossipRouter.seen_cache` (`HashMap<[u8; 32], u64>`) to purge expired message IDs older than 1 hour, preventing unbounded memory growth in long-running daemons.
 
 ---
 
