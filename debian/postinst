@@ -22,6 +22,17 @@ case "$1" in
         if command -v systemctl >/dev/null 2>&1; then
             systemctl daemon-reload || true
         fi
+
+        echo "================================================================================"
+        echo " 🛡️ randbotd systemd service configured."
+        echo " Note: In headless daemon mode, randbotd requires a master passphrase."
+        echo " Option A (Linux Kernel Keyring):"
+        echo "   keyctl add user randbotd:masterpass \"your_secret_passphrase\" @s"
+        echo " Option B (Encrypted systemd Credential):"
+        echo "   echo -n \"your_secret_passphrase\" | sudo systemd-creds encrypt --name=masterpass - /etc/randbotd/masterpass.cred"
+        echo " Option C (Insecure /etc/machine-id fallback):"
+        echo "   ExecStart=/usr/bin/randbotd --mode=headless --allow-insecure-machine-id-fallback"
+        echo "================================================================================"
     ;;
 esac
 

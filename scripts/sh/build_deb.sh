@@ -154,9 +154,29 @@ ls -t randbotd_*.deb 2>/dev/null | tail -n +4 | xargs -I {} rm -f {}
 popd > /dev/null
 
 echo "Updating APT repository metadata..."
+pushd "$REPO_DIR" > /dev/null
+rm -f Packages Packages.gz
 if command -v dpkg-scanpackages >/dev/null 2>&1; then
-    (cd "$REPO_DIR" && dpkg-scanpackages . /dev/null > Packages 2>/dev/null && gzip -9c Packages > Packages.gz)
+    dpkg-scanpackages . /dev/null > Packages 2>/dev/null
+elif command -v apt-ftparchive >/dev/null 2>&1; then
+    apt-ftparchive packages . > Packages 2>/dev/null
+else
+    echo "Generating Packages index using pure shell parser..."
+    for deb in *.deb; do
+        [ -f "$deb" ] || continue
+        if command -v dpkg-deb >/dev/null 2>&1; then
+            dpkg-deb -f "$deb" >> Packages
+        else
+            ar p "$deb" control.tar.gz | tar -xzO ./control >> Packages
+        fi
+        echo "Filename: ./$deb" >> Packages
+        echo "Size: $(stat -c%s "$deb")" >> Packages
+        echo "SHA256: $(sha256sum "$deb" | awk '{print $1}')" >> Packages
+        echo "" >> Packages
+    done
 fi
+gzip -9c Packages > Packages.gz
+popd > /dev/null
 
 cat > randbotd.list << EOF
 deb [trusted=yes] file://$REPO_DIR ./

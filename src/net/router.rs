@@ -88,10 +88,18 @@ impl GossipRouter {
         identity: Option<&NodeIdentity>,
         is_seed: bool,
     ) -> Result<Option<GossipMessage>, &'static str> {
-        self.add_peer(src);
+        let my_pubkey = identity.map(|id| id.verifying_key().to_bytes());
 
         // 1. Check if packet is HandshakeInit
         if let Ok(init) = HandshakeInit::from_bytes(buf) {
+            // Ignore self-originating handshakes
+            if let Some(my_pk) = my_pubkey {
+                if init.sender_pubkey == my_pk {
+                    return Ok(None);
+                }
+            }
+
+            self.add_peer(src);
             println!(
                 "  🤝 [P2P Handshake] Received verified HandshakeInit from {} (Key: {:02x?}, Seed Claim: {})",
                 src, &init.sender_pubkey[..4], init.is_seed()
@@ -117,6 +125,14 @@ impl GossipRouter {
 
         // 2. Check if packet is HandshakeResponse
         if let Ok(res) = HandshakeResponse::from_bytes(buf) {
+            // Ignore self-originating responses
+            if let Some(my_pk) = my_pubkey {
+                if res.sender_pubkey == my_pk {
+                    return Ok(None);
+                }
+            }
+
+            self.add_peer(src);
             println!(
                 "  🤝 [P2P Handshake] Received verified HandshakeResponse from {} (Key: {:02x?}, Seed Claim: {})",
                 src, &res.sender_pubkey[..4], res.is_seed()
@@ -131,6 +147,15 @@ impl GossipRouter {
 
         // 3. Process as GossipMessage
         let msg = GossipMessage::from_bytes(buf)?;
+
+        // Ignore self-originating gossip
+        if let Some(my_pk) = my_pubkey {
+            if msg.originator_pubkey == my_pk {
+                return Ok(None);
+            }
+        }
+
+        self.add_peer(src);
 
         if self.is_seen(&msg.msg_id) {
             return Ok(None);

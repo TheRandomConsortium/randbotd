@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -55,6 +54,14 @@ struct Cli {
     /// External public IP or domain address to advertise for inbound connections (e.g. therandomconsortium.org:43210)
     #[arg(long)]
     external_addr: Option<String>,
+
+    /// Directory path for state files (node_key.enc, peers.json). Defaults to STATE_DIRECTORY env var or "./"
+    #[arg(long)]
+    state_dir: Option<String>,
+
+    /// Allow falling back to /etc/machine-id for key encryption if no systemd/keyring masterpass is set
+    #[arg(long)]
+    allow_insecure_machine_id_fallback: bool,
 }
 
 #[tokio::main]
@@ -68,6 +75,15 @@ async fn main() {
     );
     println!("================================================================================\n");
 
+    // Resolve state directory (STATE_DIRECTORY env var, --state-dir, or current directory)
+    let base_state_dir = if let Some(custom_dir) = &args.state_dir {
+        std::path::PathBuf::from(custom_dir)
+    } else if let Ok(env_state) = std::env::var("STATE_DIRECTORY") {
+        std::path::PathBuf::from(env_state)
+    } else {
+        std::path::PathBuf::from(".")
+    };
+
     // 1. Magic Bytes Verification
     println!("[NET-01] Testing UDP Magic Bytes Inspector (b\"RBd1\")...");
     let sample_packet = b"RBd1_gossip_payload_sample";
@@ -79,8 +95,11 @@ async fn main() {
 
     // 2. Node Identity Key Loading / Generation / Recovery
     println!("\n[NET-01] Initializing Encrypted Node Identity...");
-    let key_path = Path::new("./node_key.enc");
+    let key_path = base_state_dir.join("node_key.enc");
     let is_new_identity = !key_path.exists() || args.force_new;
+
+    // Interactive CLI mode allows fallback by default, whereas systemd/headless mode enforces strict security
+    let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
 
     let identity = if let Some(recover_phrase) = &args.recover {
         println!("  -> Flag --recover passed: Recovering Node Identity from Gutenberg phrase...");
@@ -93,7 +112,7 @@ async fn main() {
         seed_arr.copy_from_slice(&raw_seed);
 
         let id = NodeIdentity::from_seed(&seed_arr);
-        if let Err(e) = id.save_encrypted(key_path, args.masterpass.as_deref()) {
+        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             eprintln!("  -> Warning: Could not save recovered key: {}", e);
         } else {
             println!(
@@ -109,8 +128,9 @@ async fn main() {
             println!("  -> Generating new Ed25519 Node Identity...");
         }
         let id = NodeIdentity::generate();
-        if let Err(e) = id.save_encrypted(key_path, args.masterpass.as_deref()) {
-            println!("  -> Warning: Could not save encrypted key: {}", e);
+        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
+            eprintln!("  -> FATAL ERROR saving key file: {}", e);
+            std::process::exit(1);
         } else {
             println!(
                 "  -> Encrypted Node Identity saved to {}",
@@ -119,7 +139,7 @@ async fn main() {
         }
         id
     } else {
-        match NodeIdentity::load_encrypted(key_path, args.masterpass.as_deref()) {
+        match NodeIdentity::load_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             Ok(id) => {
                 println!(
                     "  -> Successfully loaded encrypted key from {}",
@@ -128,7 +148,7 @@ async fn main() {
                 id
             }
             Err(err) => {
-                eprintln!("  -> FATAL ERROR loading key file: {}", err);
+                eprintln!("  -> FATAL ERROR loading key file:\n{}", err);
                 std::process::exit(1);
             }
         }
@@ -177,8 +197,8 @@ async fn main() {
 
     // 4. Persistent Peer Phonebook Initialization
     println!("\n[NET-02] Initializing Persistent Peer Phonebook (`./peers.json`)...");
-    let pb_path = Path::new("./peers.json");
-    let phonebook = match Phonebook::load_from_file(pb_path) {
+    let pb_path = base_state_dir.join("peers.json");
+    let phonebook = match Phonebook::load_from_file(&pb_path) {
         Ok(pb) => {
             println!(
                 "  -> Loaded {} peer records from {}",

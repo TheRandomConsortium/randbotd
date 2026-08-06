@@ -6,11 +6,14 @@ After=network.target
 Type=simple
 User=randbotd
 Group=randbotd
-ExecStart=/usr/bin/randbotd
+ExecStart=/usr/bin/randbotd --mode=headless
 Restart=on-failure
 WorkingDirectory=/var/lib/randbotd
 StateDirectory=randbotd
+StateDirectoryMode=0750
 ConfigurationDirectory=randbotd
+ConfigurationDirectoryMode=0750
+LoadCredentialEncrypted=masterpass:/etc/randbotd/masterpass.cred
 
 [Install]
 WantedBy=multi-user.target

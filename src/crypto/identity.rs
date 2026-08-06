@@ -40,9 +40,10 @@ impl NodeIdentity {
         &self,
         file_path: &Path,
         master_pass: Option<&str>,
+        allow_insecure_fallback: bool,
     ) -> Result<(), String> {
         let secret_bytes = self.signing_key.to_bytes();
-        let passphrase = resolve_master_secret(master_pass);
+        let passphrase = resolve_master_secret(master_pass, allow_insecure_fallback)?;
 
         let mut salt = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut salt);
@@ -53,7 +54,7 @@ impl NodeIdentity {
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let cipher = ChaCha20Poly1305::new_from_slice(&derived_key)
+        let cipher = ChaCha20Poly1305::new_from_slice(derived_key.as_slice())
             .map_err(|e| format!("Cipher init error: {}", e))?;
 
         let ciphertext = cipher
@@ -73,7 +74,11 @@ impl NodeIdentity {
         Ok(())
     }
 
-    pub fn load_encrypted(file_path: &Path, master_pass: Option<&str>) -> Result<Self, String> {
+    pub fn load_encrypted(
+        file_path: &Path,
+        master_pass: Option<&str>,
+        allow_insecure_fallback: bool,
+    ) -> Result<Self, String> {
         let data = fs::read(file_path).map_err(|e| e.to_string())?;
         if data.len() < 16 + 12 + 16 {
             return Err("Encrypted key file is corrupt or too short".into());
@@ -83,10 +88,10 @@ impl NodeIdentity {
         let nonce_bytes = &data[16..28];
         let ciphertext = &data[28..];
 
-        let passphrase = resolve_master_secret(master_pass);
+        let passphrase = resolve_master_secret(master_pass, allow_insecure_fallback)?;
         let derived_key = derive_key(&passphrase, salt)?;
 
-        let cipher = ChaCha20Poly1305::new_from_slice(&derived_key)
+        let cipher = ChaCha20Poly1305::new_from_slice(derived_key.as_slice())
             .map_err(|e| format!("Cipher init error: {}", e))?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
@@ -108,93 +113,112 @@ impl NodeIdentity {
     }
 }
 
-fn resolve_master_secret(user_pass: Option<&str>) -> Zeroizing<Vec<u8>> {
+pub fn resolve_master_secret(
+    user_pass: Option<&str>,
+    allow_insecure_fallback: bool,
+) -> Result<Zeroizing<Vec<u8>>, String> {
     // 1. Explicit user passphrase via CLI (--masterpass)
     if let Some(pass) = user_pass {
         if !pass.trim().is_empty() {
-            return Zeroizing::new(pass.as_bytes().to_vec());
+            return Ok(Zeroizing::new(pass.as_bytes().to_vec()));
         }
     }
 
     // 2. Linux Kernel Keyring / Systemd Credentials lookup
     if let Some(kernel_pass) = fetch_kernel_keyring_secret() {
         if !kernel_pass.is_empty() {
-            return Zeroizing::new(kernel_pass);
+            return Ok(Zeroizing::new(kernel_pass));
         }
     }
 
-    // 3. Fallback: /etc/machine-id for unattended systemd mode when kernel keyring is unconfigured
-    if let Ok(machine_id) = fs::read_to_string("/etc/machine-id") {
-        let trimmed = machine_id.trim();
-        if !trimmed.is_empty() {
-            return Zeroizing::new(trimmed.as_bytes().to_vec());
+    // 3. Machine-ID Fallback (only allowed if explicitly permitted via --allow-insecure-machine-id-fallback)
+    if allow_insecure_fallback {
+        if let Ok(machine_id) = fs::read_to_string("/etc/machine-id") {
+            let trimmed = machine_id.trim();
+            if !trimmed.is_empty() {
+                return Ok(Zeroizing::new(trimmed.as_bytes().to_vec()));
+            }
         }
+        return Ok(Zeroizing::new(b"randbotd_default_secure_kernel_fallback_key".to_vec()));
     }
 
-    Zeroizing::new(b"randbotd_default_secure_kernel_fallback_key".to_vec())
+    Err(
+        "⚠️ SECURITY WARNING: No master passphrase found in Linux Kernel Keyring or systemd encrypted credentials.\n\
+         To set a master passphrase in the Linux Kernel Keyring:\n\
+           keyctl add user randbotd:masterpass \"your_secret_passphrase\" @s\n\
+         Or encrypt your master passphrase using systemd-creds:\n\
+           echo -n \"your_secret_passphrase\" | sudo systemd-creds encrypt --name=masterpass - /etc/randbotd/masterpass.cred\n\
+         Alternatively, to allow using /etc/machine-id fallback (insecure), start with:\n\
+           randbotd --mode=headless --allow-insecure-machine-id-fallback".to_string()
+    )
 }
 
 /// Attempts to read master passphrase from Linux Kernel Keyring or systemd credentials
 fn fetch_kernel_keyring_secret() -> Option<Vec<u8>> {
-    // Check systemd credentials first (/run/credentials/randbotd.service/masterpass)
+    // 1. Check systemd CREDENTIALS_DIRECTORY environment variable first
+    if let Ok(creds_dir) = std::env::var("CREDENTIALS_DIRECTORY") {
+        let cred_path = Path::new(&creds_dir).join("masterpass");
+        if let Ok(cred) = fs::read(&cred_path) {
+            if !cred.is_empty() {
+                return Some(cred);
+            }
+        }
+    }
+
+    // 2. Check fallback /run/credentials/randbotd.service/masterpass path
     if let Ok(cred) = fs::read("/run/credentials/randbotd.service/masterpass") {
         if !cred.is_empty() {
             return Some(cred);
         }
     }
 
-    // Try querying keyctl from Linux Kernel Keyring
-    let output = std::process::Command::new("keyctl")
-        .args(["search", "@u", "user", "randbotd_masterpass"])
-        .output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            let key_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !key_id.is_empty() {
-                let read_out = std::process::Command::new("keyctl")
-                    .args(["read", &key_id])
-                    .output();
-                if let Ok(r) = read_out {
-                    if r.status.success() && !r.stdout.is_empty() {
-                        return Some(r.stdout);
-                    }
-                }
-            }
+    // 2. Check Linux Kernel Keyring via keyctl CLI
+    if let Ok(output) = std::process::Command::new("keyctl")
+        .args(["pipe", "randbotd:masterpass"])
+        .output()
+    {
+        if output.status.success() && !output.stdout.is_empty() {
+            return Some(output.stdout);
         }
     }
 
     None
 }
 
-fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
-    let mut key = vec![0u8; 32];
-    let params = Params::new(19456, 2, 1, Some(32)).map_err(|e| e.to_string())?;
+fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+    let params = Params::new(65536, 3, 1, Some(32))
+        .map_err(|e| format!("Argon2 params error: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
+    let mut derived_key = Zeroizing::new([0u8; 32]);
     argon2
-        .hash_password_into(passphrase, salt, &mut key)
-        .map_err(|e| e.to_string())?;
+        .hash_password_into(passphrase, salt, derived_key.as_mut_slice())
+        .map_err(|e| format!("Argon2 key derivation error: {}", e))?;
 
-    Ok(Zeroizing::new(key))
+    Ok(derived_key)
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]
     fn test_identity_encrypted_roundtrip() {
-        let mut path = std::env::temp_dir();
-        path.push("randbotd_test_node_key.enc");
-
         let identity = NodeIdentity::generate();
-        let pass = "test_cypherpunk_masterpass_123";
+        let path = std::env::temp_dir().join("randbotd_test_key.enc");
 
-        identity.save_encrypted(&path, Some(pass)).unwrap();
-        let loaded = NodeIdentity::load_encrypted(&path, Some(pass)).unwrap();
+        identity
+            .save_encrypted(&path, Some("super_secret_passphrase"), true)
+            .expect("Failed to save encrypted key");
 
-        assert_eq!(identity.verifying_key(), loaded.verifying_key());
-        let _ = fs::remove_file(path);
+        let loaded = NodeIdentity::load_encrypted(&path, Some("super_secret_passphrase"), true)
+            .expect("Failed to load encrypted key");
+
+        assert_eq!(
+            identity.verifying_key().to_bytes(),
+            loaded.verifying_key().to_bytes()
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -2,3 +2,4 @@
 /build_temp/
 *.deb
 *.enc
+randbotd.list
