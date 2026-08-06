@@ -20,11 +20,13 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
 | `NET-01` | **Ed25519 Node Identity** | Node keypair generation, cryptographic identity persistence, and handshake framing. | 🟢 |
-| `NET-02` | **Multi-Hop P2P Gossip Engine** | Multi-hop gossip protocol (unlike single-hop designs) for resilient, network-wide propagation of votes and CA declarations. | 🔴 |
-| `NET-03` | **Multi-Network Routing** | Support for peer discovery across Handshake (`.hns`), Tor (`.onion`), I2P (`.i2p`), and Clearnet IPs. | 🔴 |
+| `NET-02` | **Multi-Hop P2P Gossip Engine** | Multi-hop gossip protocol (unlike single-hop designs) for resilient, network-wide propagation of votes, CA declarations, and signed address updates (`AddressAnnouncement`). Includes seen-cache deduplication, UPnP port mapping, and phonebook seed resolution (`therandomconsortium.org:43210`). | 🟢 |
+| `NET-03` | **Multi-Network Proxy Integration & Declarative Ports** | Config file options to delegate privacy transport to external Tor SOCKS5 (`tor_socks_proxy`) and I2P SAM/HTTP/SOCKS (`i2p_proxy_port`, `sam_port`) local proxies without embedding runtime binaries, adhering to lean daemon architecture. | 🔴 |
 | `NET-04` | **Local Embedded Database** | Fast transactional storage (Sled/RocksDB/SQLite) for local CA state, votes, and certificates. | 🔴 |
-| `NET-05` | **Full History Catch-Up Protocol** | Anti-entropy sync protocol enabling offline peers to retrieve missed event logs, CA root announcements, and vote chains without requiring a tokenized blockchain (uses append-only DAG/event log; coinless/fungibility-free). | 🔴 |
+| `NET-05` | **Full History Catch-Up & Anti-Entropy Protocol** | Node-bound monotonic integer + linked hash hybrid event log (`seq`, `prev_hash`). Anti-entropy sync exchanges node-scoped range vectors (`Node_A: [1..N]` with gap lists) via a self-terminating ping-pong range intersect protocol (with Merkle root fallback for heavy fragmentation), enabling offline peers to reconcile missing logs with zero coin overhead. | 🔴 |
 | `NET-06` | **Infrastructure / Headless Node Mode (`--mode=headless`)** | Daemon flag for non-interactive nodes (e.g., home servers for Caddy TLS requests or CLI CAs). Headless nodes relay P2P messages and verify PoW, but are strictly prohibited from casting votes, excluded from active voter pools ($N_{\text{active\_voter\_nodes}}$), and excluded from network voter behavioral heuristics. | 🔴 |
+| `NET-07` | **Do-Not-Advertise IP Config (`do_not_advertise_ip`)** | Configuration flag allowing privacy-focused nodes to suppress broadcasting clearnet IPv4/v6 addresses, advertising `.onion` or `.i2p` hidden service addresses exclusively. | 🔴 |
+| `NET-08` | **Overlay Peer Discovery & Phonebook Sharing Engine** | P2P address book (phonebook) exchange protocol between connected peers + CLI/config manual peer importing (`randbotctl peer import` / seed lists), overcoming Tor exit / I2P outproxy port restrictions. | 🔴 |
 
 ---
 

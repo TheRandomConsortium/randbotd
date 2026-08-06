@@ -1,0 +1,12 @@
+{
+  "peers": {
+    "therandomconsortium.org:43210": {
+      "pubkey_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "address": "therandomconsortium.org:43210",
+      "last_seen": 1786022443,
+      "self_declared_seed": true,
+      "verified_seed": true,
+      "ponderation_score": 50
+    }
+  }
+}

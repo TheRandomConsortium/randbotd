@@ -75,12 +75,22 @@ impl GutenbergDriller {
         let mut current_url = "https://www.gutenberg.org/dirs/".to_string();
 
         for _depth in 0..4 {
-            let res = self.client.get(&current_url).send().map_err(|e| e.to_string())?;
+            let res = self
+                .client
+                .get(&current_url)
+                .send()
+                .map_err(|e| e.to_string())?;
             let body = res.text().map_err(|e| e.to_string())?;
 
             let links = extract_html_links(&body);
-            let subdirs: Vec<&String> = links.iter().filter(|l| l.ends_with('/') && !l.starts_with('?') && *l != "../" && *l != "/").collect();
-            let txt_files: Vec<&String> = links.iter().filter(|l| l.ends_with(".txt") || l.ends_with(".txt.utf-8")).collect();
+            let subdirs: Vec<&String> = links
+                .iter()
+                .filter(|l| l.ends_with('/') && !l.starts_with('?') && *l != "../" && *l != "/")
+                .collect();
+            let txt_files: Vec<&String> = links
+                .iter()
+                .filter(|l| l.ends_with(".txt") || l.ends_with(".txt.utf-8"))
+                .collect();
 
             if !txt_files.is_empty() && (rand_dice(100) < 60 || subdirs.is_empty()) {
                 let choice = txt_files[rand_dice(txt_files.len())];
@@ -106,12 +116,19 @@ impl GutenbergDriller {
     }
 
     pub fn fetch_word_from_book(&self, book_url: &str) -> Result<(String, usize), String> {
-        let res = self.client.get(book_url).send().map_err(|e| e.to_string())?;
+        let res = self
+            .client
+            .get(book_url)
+            .send()
+            .map_err(|e| e.to_string())?;
         let text = res.text().map_err(|e| e.to_string())?;
-        
+
         let mut words: Vec<String> = text
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
             .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_alphabetic()))
             .collect();
 
@@ -136,13 +153,16 @@ impl Default for GutenbergDriller {
 }
 
 fn rand_dice(max: usize) -> usize {
-    if max <= 1 { return 0; }
+    if max <= 1 {
+        return 0;
+    }
     use rand::Rng;
     rand::rngs::OsRng.gen_range(0..max)
 }
 
 fn clean_word(w: &str) -> String {
-    w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
+    w.trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
 }
 
 fn extract_html_links(html: &str) -> Vec<String> {

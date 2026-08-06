@@ -1,14 +1,15 @@
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
-use argon2::{Argon2, Algorithm, Version, Params};
-use zeroize::{Zeroize, Zeroizing};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::RngCore;
 use std::fs;
 use std::path::Path;
+use zeroize::{Zeroize, Zeroizing};
 
+#[derive(Clone)]
 pub struct NodeIdentity {
     signing_key: SigningKey,
 }
@@ -35,10 +36,14 @@ impl NodeIdentity {
         self.signing_key.verifying_key()
     }
 
-    pub fn save_encrypted(&self, file_path: &Path, master_pass: Option<&str>) -> Result<(), String> {
+    pub fn save_encrypted(
+        &self,
+        file_path: &Path,
+        master_pass: Option<&str>,
+    ) -> Result<(), String> {
         let secret_bytes = self.signing_key.to_bytes();
         let passphrase = resolve_master_secret(master_pass);
-        
+
         let mut salt = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut salt);
 
@@ -85,11 +90,10 @@ impl NodeIdentity {
             .map_err(|e| format!("Cipher init error: {}", e))?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        let decrypted_bytes = Zeroizing::new(
-            cipher
-                .decrypt(nonce, ciphertext)
-                .map_err(|_| "Failed to decrypt node key: Invalid passphrase or corrupted key file")?
-        );
+        let decrypted_bytes =
+            Zeroizing::new(cipher.decrypt(nonce, ciphertext).map_err(|_| {
+                "Failed to decrypt node key: Invalid passphrase or corrupted key file"
+            })?);
 
         if decrypted_bytes.len() != 32 {
             return Err("Decrypted secret key invalid length".into());

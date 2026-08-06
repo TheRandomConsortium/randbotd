@@ -32,6 +32,9 @@ Static algorithms become single points of systemic failure. `randbotd` enforces 
 ### IV. The Myth of the "Leecher": Infrastructure Nodes as Network Citizens
 In traditional P2P networks, non-voting or headless nodes are often labeled as "leechers". In `randbotd`, **no node is a true leecher**. Even an automated daemon running in headless mode (`--mode=headless`) on a home server—which never browses, casts votes, or evaluates domain reputation—actively serves the ecosystem by relaying multi-hop P2P gossip messages, verifying Proof-of-Work challenges, propagating CA cert chains, and reinforcing swarm topology. We accommodate infrastructure nodes natively by isolating them from voter pool calculations ($N_{\text{active\_voter\_nodes}}$) and behavioral heuristics, ensuring that server infrastructure strengthens the network without degrading reputation math.
 
+### V. Lean Daemon Philosophy: Proxy Delegation Over Monolithic Bundling
+Keeping `randbotd` lean is a deliberate architectural and philosophical choice. We explicitly reject bundling or embedding heavy privacy network runtimes (such as Tor daemons or I2P routers) into `randbotd`. Unlike monolithic browser suites (e.g., Juanita Banana), `randbotd` operates as a lightweight, single-purpose Unix daemon. It exposes simple configuration parameters (`tor_socks_proxy`, `i2p_proxy_port`, `sam_port`) so node operators can direct network traffic through their existing, independently managed local privacy proxies. This preserves process isolation, minimizes attack surface, avoids redundant resource consumption, and respects the Unix philosophy of doing one thing well.
+
 ---
 
 ## ⚖️ 3. Architectural Tenets
@@ -53,7 +56,7 @@ In traditional P2P networks, non-voting or headless nodes are often labeled as "
 * **Opt-In Risk Floors**: CA operators retain sovereignty to adjust their accepted risk floor, enabling courageous nodes to host high-risk, censorship-resistant, or dissident domains while taking accountability for their aggregate CA reputation.
 
 ### 3. Resilience, Multi-Hop Sync & Offline Resilience
-* **Multi-Hop Gossip & Coinless Catch-Up Log**: Unlike single-hop gossip implementations, `randbotd` employs multi-hop P2P gossip. Reconnecting or offline peers synchronize full historical event logs via an append-only DAG/log without requiring a tokenized blockchain (no coins, zero fungibility overhead).
+* **Multi-Hop Gossip & Node-Bound Hybrid Catch-Up Log**: Unlike single-hop gossip implementations, `randbotd` employs multi-hop P2P gossip to propagate real-time events network-wide. Reconnecting or offline peers synchronize missing historical event logs through a **Node-Bound Integer + Linked Hash Hybrid Log** (`seq`, `prev_hash`). Peers exchange compact node-scoped range vectors (`Node_A: [1..N]`) and resolve sequence gaps using a self-terminating ping-pong range intersect protocol (with Merkle root fallback for heavy fragmentation), achieving full anti-entropy sync with zero blockchain or coin overhead.
 * **Offline CA Fallback & Immediate Selection**: To ensure zero downtime when a fair-band matched P2P CA is offline, `randbotd` provides emergency default temporary certificates (short-TTL) or allows clients to opt for `--only-online` CA pool matching for immediate cert delivery.
 * **CA Command Center & Active Purging**: CA operators maintain control planes to inspect domain metrics and actively purge UTW domains to defend CA network image (prompting affected domains to perform early renewal).
 
@@ -77,6 +80,11 @@ In traditional P2P networks, non-voting or headless nodes are often labeled as "
   * **Bait-and-Switch**: Prevented by atomic smart-contract settlement specifying exact cert algorithms, metadata, and TTL before fee release.
   * **Reputation Farming / Sybil**: Neutralized by PoW verification, 1-vote-per-node limits, and dynamic behavioral ponderation.
   * **Vendor Lock-in**: Rendered impossible by design because certificate renewals are allocated against the dynamic fair-band CA pool under client-enforced price ceilings (`--free-only` / `account_price_ceiling`).
+
+### 6. Overlay Privacy Networks, Do-Not-Advertise Isolation & Phonebook Discovery
+* **IP-to-IP Swarm Reality & Overlay Boundaries**: All P2P gossip and node-to-node communication in `randbotd` takes place directly IP-to-IP over standard TCP/UDP sockets, unless explicitly routed through Tor/I2P overlay proxies. Decentralized top-level domains like `.hns` represent identity/reputation entities evaluated within the Web-of-Trust, not distinct network transport protocols.
+* **Do-Not-Advertise IP Config (`do_not_advertise_ip`)**: Nodes seeking anonymity can instruct `randbotd` to suppress broadcasting their public IPv4/v6 addresses to the P2P swarm, advertising `.onion` or `.i2p` hidden service addresses exclusively.
+* **Overlay Peer Discovery & Phonebook Sharing**: Because Tor exit nodes and I2P outproxies strictly restrict unprompted inbound P2P connections to common client ports (`80`, `443`, `22`), traditional clearnet peer discovery sweeps fail. `randbotd` solves hidden node discovery through P2P phonebook (address book) list exchange between connected peers paired with explicit manual peer importing (`randbotctl peer import` / seed configs).
 
 ---
 
