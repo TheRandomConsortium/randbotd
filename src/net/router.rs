@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::net::UdpSocket;
@@ -12,7 +12,7 @@ use crate::net::phonebook::Phonebook;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 pub struct GossipRouter {
-    seen_cache: Arc<RwLock<HashSet<[u8; 32]>>>,
+    seen_cache: Arc<RwLock<HashMap<[u8; 32], u64>>>,
     active_peers: Arc<RwLock<HashMap<SocketAddr, u64>>>,
     phonebook: Arc<RwLock<Phonebook>>,
 }
@@ -20,7 +20,7 @@ pub struct GossipRouter {
 impl GossipRouter {
     pub fn new(phonebook: Arc<RwLock<Phonebook>>) -> Self {
         Self {
-            seen_cache: Arc::new(RwLock::new(HashSet::new())),
+            seen_cache: Arc::new(RwLock::new(HashMap::new())),
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             phonebook,
         }
@@ -66,17 +66,33 @@ impl GossipRouter {
         }
     }
 
+    pub fn prune_seen_cache(&self, max_age_secs: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Ok(mut cache) = self.seen_cache.write() {
+            cache.retain(|_, seen_at| (now - *seen_at) <= max_age_secs);
+        }
+    }
+
     pub fn is_seen(&self, msg_id: &[u8; 32]) -> bool {
         if let Ok(cache) = self.seen_cache.read() {
-            cache.contains(msg_id)
+            cache.contains_key(msg_id)
         } else {
             false
         }
     }
 
     pub fn mark_seen(&self, msg_id: [u8; 32]) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         if let Ok(mut cache) = self.seen_cache.write() {
-            cache.insert(msg_id);
+            cache.insert(msg_id, now);
         }
     }
 

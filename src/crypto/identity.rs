@@ -144,12 +144,14 @@ pub fn resolve_master_secret(
 
     Err(
         "⚠️ SECURITY WARNING: No master passphrase found in Linux Kernel Keyring or systemd encrypted credentials.\n\
-         To set a master passphrase in the Linux Kernel Keyring:\n\
+         To set a master passphrase in the Linux Kernel Keyring (disable shell history first: `set +o history`):\n\
+           set +o history\n\
            keyctl add user randbotd:masterpass \"your_secret_passphrase\" @s\n\
          Or encrypt your master passphrase using systemd-creds:\n\
+           set +o history\n\
            echo -n \"your_secret_passphrase\" | sudo systemd-creds encrypt --name=masterpass - /etc/randbotd/masterpass.cred\n\
          Alternatively, to allow using /etc/machine-id fallback (insecure), start with:\n\
-           randbotd --mode=headless --allow-insecure-machine-id-fallback".to_string()
+           randbotd --allow-insecure-machine-id-fallback".to_string()
     )
 }
 

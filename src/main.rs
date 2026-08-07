@@ -27,8 +27,8 @@ struct Cli {
     #[arg(long)]
     masterpass: Option<String>,
 
-    /// Node operation mode: interactive or headless
-    #[arg(long, default_value = "interactive")]
+    /// Node operation mode: daemon (default) or headless (systemd service)
+    #[arg(long, default_value = "daemon")]
     mode: String,
 
     /// Force generation of a new Node Identity, replacing any existing keyfile
@@ -163,12 +163,53 @@ async fn main() {
         println!(
             "\n================================================================================"
         );
-        println!("  ⚠️ SAVE THIS RECOVERY PHRASE SECURELY:");
         let (_seed, mnemonic_phrase) =
             tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
                 .await
                 .expect("Mnemonic generation task failed");
-        println!("  \"{}\"", mnemonic_phrase);
+
+        let ram_dir = std::path::Path::new("/dev/shm");
+        let target_dir = if ram_dir.exists() && ram_dir.is_dir() {
+            ram_dir
+        } else {
+            std::path::Path::new("/tmp")
+        };
+        let pid = std::process::id();
+        let mnemonic_path = target_dir.join(format!("randbotd_mnemonic_{}.txt", pid));
+
+        let write_result = (|| -> std::io::Result<()> {
+            let file = std::fs::File::create(&mnemonic_path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = file.metadata()?.permissions();
+                perms.set_mode(0o600);
+                file.set_permissions(perms)?;
+            }
+            use std::io::Write;
+            let mut writer = std::io::BufWriter::new(file);
+            writeln!(writer, "================================================================================")?;
+            writeln!(writer, "  🛡️ RANDOM CONSORTIUM DAEMON (randbotd) RECOVERY PHRASE")?;
+            writeln!(writer, "================================================================================")?;
+            writeln!(writer, "  Keep this 24-word Gutenberg recovery phrase secure!\n")?;
+            writeln!(writer, "{}\n", mnemonic_phrase)?;
+            writeln!(writer, "================================================================================")?;
+            writer.flush()?;
+            Ok(())
+        })();
+
+        if write_result.is_ok() {
+            println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
+            println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
+            println!("     {}", mnemonic_path.display());
+            println!("  -> Please inspect/copy the phrase securely (e.g. `cat {}`), then remove the file.", mnemonic_path.display());
+        }
+
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            println!("\n  ⚠️ RECOVERY PHRASE:");
+            println!("  \"{}\"", mnemonic_phrase);
+        }
         println!(
             "================================================================================\n"
         );
@@ -282,6 +323,9 @@ async fn main() {
 
             // Prune peers inactive for > 90 seconds (3 missed ping cycles)
             ping_router.prune_inactive_peers(90);
+
+            // Prune seen gossip message IDs older than 1 hour (3600 seconds)
+            ping_router.prune_seen_cache(3600);
         }
     });
 
@@ -373,11 +417,6 @@ async fn main() {
     println!("  (Press Ctrl+C to stop daemon)");
     println!("================================================================================");
 
-    if args.mode == "daemon" || args.mode == "headless" {
-        let _ = tokio::signal::ctrl_c().await;
-        println!("\n  🛑 Shutdown signal received. Exiting `randbotd` daemon.");
-    } else {
-        // In interactive mode, stay active briefly for network events
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
+    let _ = tokio::signal::ctrl_c().await;
+    println!("\n  🛑 Shutdown signal received. Exiting `randbotd` daemon.");
 }
