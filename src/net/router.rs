@@ -103,6 +103,7 @@ impl GossipRouter {
         socket: &UdpSocket,
         identity: Option<&NodeIdentity>,
         is_seed: bool,
+        is_headless: bool,
     ) -> Result<Option<GossipMessage>, &'static str> {
         let my_pubkey = identity.map(|id| id.verifying_key().to_bytes());
 
@@ -117,8 +118,8 @@ impl GossipRouter {
 
             self.add_peer(src);
             println!(
-                "  🤝 [P2P Handshake] Received verified HandshakeInit from {} (Key: {:02x?}, Seed Claim: {})",
-                src, &init.sender_pubkey[..4], init.is_seed()
+                "  🤝 [P2P Handshake] Received verified HandshakeInit from {} (Key: {:02x?}, Seed: {}, Headless: {}, Voter: {})",
+                src, &init.sender_pubkey[..4], init.is_seed(), init.is_headless(), init.is_voter()
             );
 
             if let Ok(mut pb) = self.phonebook.write() {
@@ -131,7 +132,7 @@ impl GossipRouter {
                     let rng = rand::rngs::OsRng;
                     let ephemeral_secret = EphemeralSecret::random_from_rng(rng);
                     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
-                    HandshakeResponse::new(id.signing_key(), &ephemeral_public, is_seed)
+                    HandshakeResponse::new(id.signing_key(), &ephemeral_public, is_seed, is_headless)
                 };
                 let _ = socket.send_to(&response_frame.to_bytes(), src).await;
             }
@@ -150,8 +151,8 @@ impl GossipRouter {
 
             self.add_peer(src);
             println!(
-                "  🤝 [P2P Handshake] Received verified HandshakeResponse from {} (Key: {:02x?}, Seed Claim: {})",
-                src, &res.sender_pubkey[..4], res.is_seed()
+                "  🤝 [P2P Handshake] Received verified HandshakeResponse from {} (Key: {:02x?}, Seed: {}, Headless: {}, Voter: {})",
+                src, &res.sender_pubkey[..4], res.is_seed(), res.is_headless(), res.is_voter()
             );
 
             if let Ok(mut pb) = self.phonebook.write() {
@@ -245,7 +246,7 @@ mod tests {
         let phonebook = Arc::new(RwLock::new(Phonebook::new()));
         let router = GossipRouter::new(phonebook);
 
-        let identity = NodeIdentity::generate();
+        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
         let msg = GossipMessage::new(
             identity.signing_key(),
             1,

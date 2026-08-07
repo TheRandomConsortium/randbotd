@@ -6,6 +6,8 @@ use crate::net::frame::MAGIC_BYTES;
 
 pub const MAGIC_BYTES_RESPONSE: &[u8; 4] = b"RBr1";
 pub const CAPABILITY_FLAG_SEED: u32 = 1 << 0;
+pub const CAPABILITY_FLAG_HEADLESS: u32 = 1 << 1;
+pub const CAPABILITY_FLAG_VOTER: u32 = 1 << 2;
 
 #[derive(Debug, Clone)]
 pub struct HandshakeInit {
@@ -22,6 +24,7 @@ impl HandshakeInit {
         signing_key: &SigningKey,
         ephemeral_x25519_pub: &X25519PublicKey,
         is_seed: bool,
+        is_headless: bool,
     ) -> Self {
         let sender_pubkey = signing_key.verifying_key().to_bytes();
         let ephemeral_bytes = ephemeral_x25519_pub.to_bytes();
@@ -30,7 +33,15 @@ impl HandshakeInit {
             .unwrap_or_default()
             .as_secs();
 
-        let capabilities = if is_seed { CAPABILITY_FLAG_SEED } else { 0 };
+        let mut capabilities = 0u32;
+        if is_seed {
+            capabilities |= CAPABILITY_FLAG_SEED;
+        }
+        if is_headless {
+            capabilities |= CAPABILITY_FLAG_HEADLESS;
+        } else {
+            capabilities |= CAPABILITY_FLAG_VOTER;
+        }
 
         let mut nonce = [0u8; 24];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
@@ -57,6 +68,14 @@ impl HandshakeInit {
 
     pub fn is_seed(&self) -> bool {
         (self.capabilities & CAPABILITY_FLAG_SEED) != 0
+    }
+
+    pub fn is_headless(&self) -> bool {
+        (self.capabilities & CAPABILITY_FLAG_HEADLESS) != 0
+    }
+
+    pub fn is_voter(&self) -> bool {
+        (self.capabilities & CAPABILITY_FLAG_VOTER) != 0
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -146,6 +165,7 @@ impl HandshakeResponse {
         signing_key: &SigningKey,
         ephemeral_x25519_pub: &X25519PublicKey,
         is_seed: bool,
+        is_headless: bool,
     ) -> Self {
         let sender_pubkey = signing_key.verifying_key().to_bytes();
         let ephemeral_bytes = ephemeral_x25519_pub.to_bytes();
@@ -154,7 +174,15 @@ impl HandshakeResponse {
             .unwrap_or_default()
             .as_secs();
 
-        let capabilities = if is_seed { CAPABILITY_FLAG_SEED } else { 0 };
+        let mut capabilities = 0u32;
+        if is_seed {
+            capabilities |= CAPABILITY_FLAG_SEED;
+        }
+        if is_headless {
+            capabilities |= CAPABILITY_FLAG_HEADLESS;
+        } else {
+            capabilities |= CAPABILITY_FLAG_VOTER;
+        }
 
         let mut nonce = [0u8; 24];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
@@ -181,6 +209,14 @@ impl HandshakeResponse {
 
     pub fn is_seed(&self) -> bool {
         (self.capabilities & CAPABILITY_FLAG_SEED) != 0
+    }
+
+    pub fn is_headless(&self) -> bool {
+        (self.capabilities & CAPABILITY_FLAG_HEADLESS) != 0
+    }
+
+    pub fn is_voter(&self) -> bool {
+        (self.capabilities & CAPABILITY_FLAG_VOTER) != 0
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -263,31 +299,35 @@ mod tests {
 
     #[test]
     fn test_handshake_init_roundtrip() {
-        let identity = NodeIdentity::generate();
+        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
         let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
-        let init = HandshakeInit::new(identity.signing_key(), &ephemeral_public, true);
+        let init = HandshakeInit::new(identity.signing_key(), &ephemeral_public, true, false);
         let encoded = init.to_bytes();
         let decoded = HandshakeInit::from_bytes(&encoded).expect("Decoding failed");
 
         assert_eq!(init.sender_pubkey, decoded.sender_pubkey);
         assert_eq!(init.ephemeral_x25519, decoded.ephemeral_x25519);
         assert!(decoded.is_seed());
+        assert!(decoded.is_voter());
+        assert!(!decoded.is_headless());
     }
 
     #[test]
     fn test_handshake_response_roundtrip() {
-        let identity = NodeIdentity::generate();
+        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
         let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
-        let res = HandshakeResponse::new(identity.signing_key(), &ephemeral_public, true);
+        let res = HandshakeResponse::new(identity.signing_key(), &ephemeral_public, true, true);
         let encoded = res.to_bytes();
         let decoded = HandshakeResponse::from_bytes(&encoded).expect("Decoding failed");
 
         assert_eq!(res.sender_pubkey, decoded.sender_pubkey);
         assert_eq!(res.ephemeral_x25519, decoded.ephemeral_x25519);
         assert!(decoded.is_seed());
+        assert!(decoded.is_headless());
+        assert!(!decoded.is_voter());
     }
 }

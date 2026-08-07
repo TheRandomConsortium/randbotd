@@ -9,23 +9,69 @@ use std::fs;
 use std::path::Path;
 use zeroize::{Zeroize, Zeroizing};
 
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NodeRole {
+    Voter = 1,
+    Headless = 2,
+}
+
+impl NodeRole {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            2 => NodeRole::Headless,
+            _ => NodeRole::Voter,
+        }
+    }
+
+    pub fn domain_prefix(&self) -> &'static [u8] {
+        match self {
+            NodeRole::Voter => b"randbotd_v1_identity_domain_voter",
+            NodeRole::Headless => b"randbotd_v1_identity_domain_headless",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct NodeIdentity {
     signing_key: SigningKey,
+    role: NodeRole,
 }
 
 impl NodeIdentity {
-    pub fn generate() -> Self {
-        let mut secret = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut secret);
-        let signing_key = SigningKey::from_bytes(&secret);
-        secret.zeroize();
-        Self { signing_key }
+    pub fn generate(role: NodeRole) -> Self {
+        let mut raw_secret = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut raw_secret);
+        let id = Self::from_seed_and_role(&raw_secret, role);
+        raw_secret.zeroize();
+        id
     }
 
-    pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let signing_key = SigningKey::from_bytes(seed);
-        Self { signing_key }
+    pub fn from_seed_and_role(seed: &[u8; 32], role: NodeRole) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(role.domain_prefix());
+        hasher.update(seed);
+        let derived_hash = hasher.finalize();
+
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&derived_hash[..32]);
+
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        key_bytes.zeroize();
+        Self { signing_key, role }
+    }
+
+    pub fn role(&self) -> NodeRole {
+        self.role
+    }
+
+    pub fn is_headless(&self) -> bool {
+        self.role == NodeRole::Headless
+    }
+
+    pub fn is_voter(&self) -> bool {
+        self.role == NodeRole::Voter
     }
 
     pub fn signing_key(&self) -> &SigningKey {
@@ -57,8 +103,12 @@ impl NodeIdentity {
         let cipher = ChaCha20Poly1305::new_from_slice(derived_key.as_slice())
             .map_err(|e| format!("Cipher init error: {}", e))?;
 
+        let mut plain_payload = Vec::new();
+        plain_payload.push(self.role as u8);
+        plain_payload.extend_from_slice(secret_bytes.as_slice());
+
         let ciphertext = cipher
-            .encrypt(nonce, secret_bytes.as_slice())
+            .encrypt(nonce, plain_payload.as_slice())
             .map_err(|e| format!("Encryption error: {}", e))?;
 
         let mut file_payload = Vec::new();
@@ -100,16 +150,17 @@ impl NodeIdentity {
                 "Failed to decrypt node key: Invalid passphrase or corrupted key file"
             })?);
 
-        if decrypted_bytes.len() != 32 {
-            return Err("Decrypted secret key invalid length".into());
+        if decrypted_bytes.len() < 33 {
+            return Err("Decrypted payload invalid length".into());
         }
 
+        let role = NodeRole::from_u8(decrypted_bytes[0]);
         let mut key_arr = [0u8; 32];
-        key_arr.copy_from_slice(&decrypted_bytes);
+        key_arr.copy_from_slice(&decrypted_bytes[1..33]);
         let signing_key = SigningKey::from_bytes(&key_arr);
         key_arr.zeroize();
 
-        Ok(Self { signing_key })
+        Ok(Self { signing_key, role })
     }
 }
 
@@ -206,7 +257,7 @@ pub mod tests {
 
     #[test]
     fn test_identity_encrypted_roundtrip() {
-        let identity = NodeIdentity::generate();
+        let identity = NodeIdentity::generate(NodeRole::Headless);
         let path = std::env::temp_dir().join("randbotd_test_key.enc");
 
         identity
@@ -220,7 +271,23 @@ pub mod tests {
             identity.verifying_key().to_bytes(),
             loaded.verifying_key().to_bytes()
         );
+        assert_eq!(loaded.role(), NodeRole::Headless);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_role_domain_separation_different_keys() {
+        let seed = [0x42u8; 32];
+        let voter_id = NodeIdentity::from_seed_and_role(&seed, NodeRole::Voter);
+        let headless_id = NodeIdentity::from_seed_and_role(&seed, NodeRole::Headless);
+
+        assert_ne!(
+            voter_id.verifying_key().to_bytes(),
+            headless_id.verifying_key().to_bytes(),
+            "Voter and Headless keys MUST be cryptographically distinct!"
+        );
+        assert!(voter_id.is_voter());
+        assert!(headless_id.is_headless());
     }
 }

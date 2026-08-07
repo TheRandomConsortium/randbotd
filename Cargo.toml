@@ -1,6 +1,6 @@
 [package]
 name = "randbotd"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["The Random Consortium"]
 description = "Random Consortium's Certificate Bot Daemon"
@@ -21,6 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 igd = "0.12"
+toml = "0.8"
 
 [package.metadata.deb]
 maintainer = "The Random Consortium"

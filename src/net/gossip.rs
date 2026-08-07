@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_gossip_message_serialization_roundtrip() {
-        let identity = NodeIdentity::generate();
+        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
         let payload = b"TW_vote_for_randbot.hns".to_vec();
 
         let msg = GossipMessage::new(

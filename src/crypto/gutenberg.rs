@@ -45,6 +45,37 @@ impl GutenbergMnemonic {
     pub fn phrase_to_seed(phrase: &str) -> Vec<u8> {
         derive_seed_from_phrase(phrase)
     }
+
+    /// Saves the Gutenberg recovery phrase to RAM (/dev/shm) with strict 0600 permissions to avoid journalctl logging.
+    pub fn save_mnemonic_to_ram(phrase: &str) -> std::io::Result<std::path::PathBuf> {
+        let ram_dir = std::path::Path::new("/dev/shm");
+        let target_dir = if ram_dir.exists() && ram_dir.is_dir() {
+            ram_dir
+        } else {
+            std::path::Path::new("/tmp")
+        };
+        let pid = std::process::id();
+        let mnemonic_path = target_dir.join(format!("randbotd_mnemonic_{}.txt", pid));
+
+        let file = std::fs::File::create(&mnemonic_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = file.metadata()?.permissions();
+            perms.set_mode(0o600);
+            file.set_permissions(perms)?;
+        }
+        use std::io::Write;
+        let mut writer = std::io::BufWriter::new(file);
+        writeln!(writer, "================================================================================")?;
+        writeln!(writer, "  🛡️ RANDOM CONSORTIUM DAEMON (randbotd) RECOVERY PHRASE")?;
+        writeln!(writer, "================================================================================")?;
+        writeln!(writer, "  Keep this 24-word Gutenberg recovery phrase secure!\n")?;
+        writeln!(writer, "{}\n", phrase)?;
+        writeln!(writer, "================================================================================")?;
+        writer.flush()?;
+        Ok(mnemonic_path)
+    }
 }
 
 pub fn derive_seed_from_phrase(phrase: &str) -> Vec<u8> {

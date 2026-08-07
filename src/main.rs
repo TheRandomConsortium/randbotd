@@ -3,11 +3,13 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
+mod config;
 mod crypto;
 mod net;
 
+use config::DaemonConfig;
 use crypto::gutenberg::GutenbergMnemonic;
-use crypto::identity::NodeIdentity;
+use crypto::identity::{NodeIdentity, NodeRole};
 use net::frame::validate_magic_bytes;
 use net::gossip::{
     AddressAnnouncementPayload, GossipMessage, DEFAULT_GOSSIP_TTL,
@@ -18,11 +20,16 @@ use net::nat::{diagnose_nat_reachability, NatStatus};
 use net::phonebook::{Phonebook, DEFAULT_SEED_DOMAIN};
 use net::router::GossipRouter;
 use rand::rngs::OsRng;
+use std::path::Path;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 #[derive(Parser, Debug)]
-#[command(name = "randbotd", author = "The Random Consortium", version = "0.3.0")]
+#[command(name = "randbotd", author = "The Random Consortium", version = "1.0.0")]
 struct Cli {
+    /// Path to TOML configuration file (defaults to /etc/randbotd/randbotd.toml or ./randbotd.toml)
+    #[arg(long)]
+    config: Option<String>,
+
     /// Master passphrase for node private key decryption (optional for headless systemd mode)
     #[arg(long)]
     masterpass: Option<String>,
@@ -39,9 +46,9 @@ struct Cli {
     #[arg(long)]
     recover: Option<String>,
 
-    /// P2P UDP listening port (default: 43210)
-    #[arg(long, default_value_t = 43210)]
-    port: u16,
+    /// P2P UDP listening port (overrides config file default 43210)
+    #[arg(long)]
+    port: Option<u16>,
 
     /// Enable seed node mode to advertise high-uptime bootstrap availability
     #[arg(long)]
@@ -59,6 +66,10 @@ struct Cli {
     #[arg(long)]
     state_dir: Option<String>,
 
+    /// Suppress connecting to clearnet IPv4/v6 peers, requiring .onion or .i2p hidden seeds
+    #[arg(long)]
+    do_not_use_clearnet_peers: bool,
+
     /// Allow falling back to /etc/machine-id for key encryption if no systemd/keyring masterpass is set
     #[arg(long)]
     allow_insecure_machine_id_fallback: bool,
@@ -67,22 +78,57 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     let args = Cli::parse();
-    println!("================================================================================");
-    println!("  🛡️ Random Consortium Certificate Bot Daemon (randbotd) v0.3.0");
-    println!(
-        "  [Mode: {} | Seed Mode: {} | P2P Port: {}]",
-        args.mode, args.seed, args.port
-    );
-    println!("================================================================================\n");
 
-    // Resolve state directory (STATE_DIRECTORY env var, --state-dir, or current directory)
+    // 0. Declarative Configuration File Loading (NET-03)
+    let explicit_config_path = args.config.as_deref().map(Path::new);
+    let daemon_cfg = DaemonConfig::load_default_or_create(explicit_config_path);
+
+    // Merge CLI arguments with DaemonConfig
+    let port = args.port.or(daemon_cfg.network.port).unwrap_or(43210);
+    let seed_mode = args.seed || daemon_cfg.network.seed.unwrap_or(false);
+    let explicit_peer = args.peer.clone().or_else(|| daemon_cfg.network.peer.clone());
+    let external_addr = args
+        .external_addr
+        .clone()
+        .or_else(|| daemon_cfg.network.external_addr.clone());
+    let do_not_use_clearnet_peers = args.do_not_use_clearnet_peers
+        || daemon_cfg
+            .network
+            .do_not_use_clearnet_peers
+            .unwrap_or(false);
+
+    let tor_socks_proxy = daemon_cfg.privacy.tor_socks_proxy.clone();
+    let i2p_proxy_port = daemon_cfg.privacy.i2p_proxy_port;
+
+    if tor_socks_proxy.is_some() || i2p_proxy_port.is_some() {
+        println!("[NET-03] Multi-Network Overlay Proxy Routing Policy:");
+        if let Some(ref tor_addr) = tor_socks_proxy {
+            println!("  -> Tor (.onion):   SOCKS5 Proxy {}", tor_addr);
+        }
+        if let Some(i2p_port) = i2p_proxy_port {
+            println!("  -> I2P (.i2p):     SAM Proxy 127.0.0.1:{}", i2p_port);
+        }
+        println!("  -> Clearnet:       Native UDP/DNS sockets");
+        println!("  ℹ️ Notice: Clearnet peers are NOT routed over Tor/I2P proxies because exit nodes block arbitrary P2P UDP ports.\n");
+    }
+    // Resolve state directory (args.state_dir, daemon_cfg.storage.state_dir, STATE_DIRECTORY env var, or "./")
     let base_state_dir = if let Some(custom_dir) = &args.state_dir {
         std::path::PathBuf::from(custom_dir)
+    } else if let Some(cfg_dir) = &daemon_cfg.storage.state_dir {
+        std::path::PathBuf::from(cfg_dir)
     } else if let Ok(env_state) = std::env::var("STATE_DIRECTORY") {
         std::path::PathBuf::from(env_state)
     } else {
         std::path::PathBuf::from(".")
     };
+
+    println!("================================================================================");
+    println!("  🛡️ Random Consortium Certificate Bot Daemon (randbotd) v0.3.0");
+    println!(
+        "  [Mode: {} | Seed Mode: {} | P2P Port: {}]",
+        args.mode, seed_mode, port
+    );
+    println!("================================================================================\n");
 
     // 1. Magic Bytes Verification
     println!("[NET-01] Testing UDP Magic Bytes Inspector (b\"RBd1\")...");
@@ -101,6 +147,12 @@ async fn main() {
     // Interactive CLI mode allows fallback by default, whereas systemd/headless mode enforces strict security
     let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
 
+    let target_role = if args.mode == "headless" {
+        NodeRole::Headless
+    } else {
+        NodeRole::Voter
+    };
+
     let identity = if let Some(recover_phrase) = &args.recover {
         println!("  -> Flag --recover passed: Recovering Node Identity from Gutenberg phrase...");
         let raw_seed = GutenbergMnemonic::phrase_to_seed(recover_phrase);
@@ -111,12 +163,13 @@ async fn main() {
         let mut seed_arr = [0u8; 32];
         seed_arr.copy_from_slice(&raw_seed);
 
-        let id = NodeIdentity::from_seed(&seed_arr);
+        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
         if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             eprintln!("  -> Warning: Could not save recovered key: {}", e);
         } else {
             println!(
-                "  -> Recovered Node Identity saved to {}",
+                "  -> Recovered Node Identity ({:?}) saved to {}",
+                target_role,
                 key_path.display()
             );
         }
@@ -125,15 +178,16 @@ async fn main() {
         if args.force_new && key_path.exists() {
             println!("  -> Flag --force-new passed: Replacing existing Node Identity keyfile.");
         } else {
-            println!("  -> Generating new Ed25519 Node Identity...");
+            println!("  -> Generating new Ed25519 Node Identity ({:?})...", target_role);
         }
-        let id = NodeIdentity::generate();
+        let id = NodeIdentity::generate(target_role);
         if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             eprintln!("  -> FATAL ERROR saving key file: {}", e);
             std::process::exit(1);
         } else {
             println!(
-                "  -> Encrypted Node Identity saved to {}",
+                "  -> Encrypted Node Identity ({:?}) saved to {}",
+                target_role,
                 key_path.display()
             );
         }
@@ -142,9 +196,17 @@ async fn main() {
         match NodeIdentity::load_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             Ok(id) => {
                 println!(
-                    "  -> Successfully loaded encrypted key from {}",
+                    "  -> Successfully loaded encrypted {:?} key from {}",
+                    id.role(),
                     key_path.display()
                 );
+                if id.role() != target_role {
+                    println!(
+                        "  ⚠️ SECURITY NOTICE: Loaded key role is {:?}, running with CLI mode `{}`.",
+                        id.role(),
+                        args.mode
+                    );
+                }
                 id
             }
             Err(err) => {
@@ -155,8 +217,10 @@ async fn main() {
     };
 
     println!(
-        "  -> Node Public Key: {:02x?}",
-        &identity.verifying_key().to_bytes()[..8]
+        "  -> Node Public Key: {:02x?} [Role: {:?}, Voter: {}]",
+        &identity.verifying_key().to_bytes()[..8],
+        identity.role(),
+        identity.is_voter()
     );
 
     if is_new_identity && args.recover.is_none() {
@@ -168,37 +232,7 @@ async fn main() {
                 .await
                 .expect("Mnemonic generation task failed");
 
-        let ram_dir = std::path::Path::new("/dev/shm");
-        let target_dir = if ram_dir.exists() && ram_dir.is_dir() {
-            ram_dir
-        } else {
-            std::path::Path::new("/tmp")
-        };
-        let pid = std::process::id();
-        let mnemonic_path = target_dir.join(format!("randbotd_mnemonic_{}.txt", pid));
-
-        let write_result = (|| -> std::io::Result<()> {
-            let file = std::fs::File::create(&mnemonic_path)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = file.metadata()?.permissions();
-                perms.set_mode(0o600);
-                file.set_permissions(perms)?;
-            }
-            use std::io::Write;
-            let mut writer = std::io::BufWriter::new(file);
-            writeln!(writer, "================================================================================")?;
-            writeln!(writer, "  🛡️ RANDOM CONSORTIUM DAEMON (randbotd) RECOVERY PHRASE")?;
-            writeln!(writer, "================================================================================")?;
-            writeln!(writer, "  Keep this 24-word Gutenberg recovery phrase secure!\n")?;
-            writeln!(writer, "{}\n", mnemonic_phrase)?;
-            writeln!(writer, "================================================================================")?;
-            writer.flush()?;
-            Ok(())
-        })();
-
-        if write_result.is_ok() {
+        if let Ok(mnemonic_path) = GutenbergMnemonic::save_mnemonic_to_ram(&mnemonic_phrase) {
             println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
             println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
             println!("     {}", mnemonic_path.display());
@@ -217,21 +251,21 @@ async fn main() {
 
     // 3. UPnP Port Forwarding & NAT Self-Diagnosis
     println!("[NET-02] Attempting UPnP Port Forwarding & NAT Reachability Diagnosis...");
-    match diagnose_nat_reachability(args.port) {
+    match diagnose_nat_reachability(port) {
         NatStatus::UpnpMapped => {
             println!(
                 "  -> UPnP Port Forwarding SUCCESS: Port {} mapped via gateway.",
-                args.port
+                port
             );
         }
         NatStatus::Unreachable => {
             println!(
                 "  ⚠️ NAT Warning: Port {} is not currently open/mapped via UPnP.",
-                args.port
+                port
             );
             println!(
                 "  -> Please ensure UDP port {} is forwarded on your router or enable UPnP.",
-                args.port
+                port
             );
         }
     }
@@ -258,9 +292,29 @@ async fn main() {
     };
     let shared_phonebook = Arc::new(RwLock::new(phonebook));
 
-    // 5. Asynchronous Tokio UDP Socket Listener & Router Setup
+    // Broadcast AddressAnnouncement Payload
+    let external_addr_str = external_addr.unwrap_or_else(|| format!("127.0.0.1:{}", port));
+    let addr_announcement = AddressAnnouncementPayload::new(&external_addr_str, seed_mode);
+    let mut ann_bytes = Vec::new();
+    ann_bytes.extend_from_slice(&identity.verifying_key().to_bytes());
+    ann_bytes.extend_from_slice(&addr_announcement.to_bytes());
+
+    let _ann_msg = GossipMessage::new(
+        identity.signing_key(),
+        1,
+        DEFAULT_GOSSIP_TTL,
+        PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT,
+        ann_bytes,
+    );
+    shared_phonebook.write().unwrap().upsert_peer(
+        &identity.verifying_key().to_bytes(),
+        &external_addr_str,
+        seed_mode,
+    );
+
+    // 5. Bind UDP Socket & Initialize Gossip Router
     println!("\n[NET-02] Binding UDP P2P Socket & Spawning Multi-Hop Gossip Listener...");
-    let bind_addr = format!("0.0.0.0:{}", args.port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let socket = match UdpSocket::bind(&bind_addr).await {
         Ok(s) => {
             println!("  -> P2P UDP Socket bound successfully on {}", bind_addr);
@@ -268,15 +322,10 @@ async fn main() {
         }
         Err(err) => {
             eprintln!(
-                "  -> Warning: Could not bind UDP socket on {}: {}",
+                "  -> FATAL ERROR binding UDP socket on {}: {}",
                 bind_addr, err
             );
-            eprintln!("  -> Running in offline / dry-run mode for gossip verification.");
-            Arc::new(
-                UdpSocket::bind("127.0.0.1:0")
-                    .await
-                    .expect("Failed to bind loopback fallback socket"),
-            )
+            std::process::exit(1);
         }
     };
 
@@ -286,7 +335,8 @@ async fn main() {
     let listener_socket = socket.clone();
     let listener_router = router.clone();
     let listener_identity = identity.clone();
-    let is_seed = args.seed;
+    let is_headless = identity.is_headless();
+    let is_seed = seed_mode;
     tokio::spawn(async move {
         let mut buf = [0u8; 65535];
         while let Ok((len, src)) = listener_socket.recv_from(&mut buf).await {
@@ -297,6 +347,7 @@ async fn main() {
                     &listener_socket,
                     Some(&listener_identity),
                     is_seed,
+                    is_headless,
                 )
                 .await;
         }
@@ -334,8 +385,8 @@ async fn main() {
     let mut seed_addrs = shared_phonebook.read().unwrap().verified_seed_addresses();
 
     // Include explicit --peer argument if provided
-    if let Some(explicit_peer) = &args.peer {
-        if let Ok(resolved) = std::net::ToSocketAddrs::to_socket_addrs(explicit_peer) {
+    if let Some(peer_str) = &explicit_peer {
+        if let Ok(resolved) = std::net::ToSocketAddrs::to_socket_addrs(peer_str.as_str()) {
             for addr in resolved {
                 if !seed_addrs.contains(&addr) {
                     seed_addrs.push(addr);
@@ -344,11 +395,18 @@ async fn main() {
         }
     }
 
+    if do_not_use_clearnet_peers {
+        println!("\n  ⚠️ PRIVACY NOTICE: `do_not_use_clearnet_peers` is enabled. Suppressing clearnet seed connections.");
+        println!("  -> Note: Default genesis seed (therandomconsortium.org) is a clearnet address.");
+        println!("  -> You MUST import an .onion or .i2p hidden service seed for the daemon to bootstrap!");
+        seed_addrs.clear();
+    }
+
     let rng = OsRng;
     let ephemeral_secret = EphemeralSecret::random_from_rng(rng);
     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
-    let handshake_frame = HandshakeInit::new(identity.signing_key(), &ephemeral_public, args.seed);
+    let handshake_frame = HandshakeInit::new(identity.signing_key(), &ephemeral_public, seed_mode, is_headless);
     let handshake_bytes = handshake_frame.to_bytes();
 
     for seed_addr in seed_addrs {
@@ -412,7 +470,7 @@ async fn main() {
     println!("\n================================================================================");
     println!(
         "  🟢 `randbotd` v0.3.0 running. Active P2P multi-hop gossip swarm listening on port {}.",
-        args.port
+        port
     );
     println!("  (Press Ctrl+C to stop daemon)");
     println!("================================================================================");
