@@ -86,7 +86,10 @@ async fn main() {
     // Merge CLI arguments with DaemonConfig
     let port = args.port.or(daemon_cfg.network.port).unwrap_or(43210);
     let seed_mode = args.seed || daemon_cfg.network.seed.unwrap_or(false);
-    let explicit_peer = args.peer.clone().or_else(|| daemon_cfg.network.peer.clone());
+    let explicit_peer = args
+        .peer
+        .clone()
+        .or_else(|| daemon_cfg.network.peer.clone());
     let external_addr = args
         .external_addr
         .clone()
@@ -142,7 +145,6 @@ async fn main() {
     // 2. Node Identity Key Loading / Generation / Recovery
     println!("\n[NET-01] Initializing Encrypted Node Identity...");
     let key_path = base_state_dir.join("node_key.enc");
-    let is_new_identity = !key_path.exists() || args.force_new;
 
     // Interactive CLI mode allows fallback by default, whereas systemd/headless mode enforces strict security
     let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
@@ -178,19 +180,54 @@ async fn main() {
         if args.force_new && key_path.exists() {
             println!("  -> Flag --force-new passed: Replacing existing Node Identity keyfile.");
         } else {
-            println!("  -> Generating new Ed25519 Node Identity ({:?})...", target_role);
+            println!(
+                "  -> Generating new Ed25519 Node Identity ({:?})...",
+                target_role
+            );
         }
-        let id = NodeIdentity::generate(target_role);
+
+        println!("  -> Drilling Project Gutenberg entropy pool for 256-bit mnemonic seed...");
+        let (raw_seed, mnemonic_phrase) =
+            tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
+                .await
+                .expect("Mnemonic generation task failed");
+
+        if raw_seed.len() != 32 {
+            eprintln!("  -> FATAL ERROR: Invalid seed derived from Gutenberg entropy pool.");
+            std::process::exit(1);
+        }
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(&raw_seed[..32]);
+
+        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
         if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
             eprintln!("  -> FATAL ERROR saving key file: {}", e);
             std::process::exit(1);
         } else {
             println!(
-                "  -> Encrypted Node Identity ({:?}) saved to {}",
+                "  -> Encrypted Node Identity ({:?}) derived from Gutenberg mnemonic saved to {}",
                 target_role,
                 key_path.display()
             );
         }
+
+        if let Ok(mnemonic_path) = GutenbergMnemonic::save_mnemonic_to_ram(&mnemonic_phrase) {
+            println!("\n================================================================================");
+            println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
+            println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
+            println!("     {}", mnemonic_path.display());
+            println!("  -> Please inspect/copy the phrase securely (e.g. `cat {}`), then remove the file.", mnemonic_path.display());
+        }
+
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            println!("\n  ⚠️ RECOVERY PHRASE:");
+            println!("  \"{}\"", mnemonic_phrase);
+        }
+        println!(
+            "================================================================================\n"
+        );
+
         id
     } else {
         match NodeIdentity::load_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
@@ -222,32 +259,6 @@ async fn main() {
         identity.role(),
         identity.is_voter()
     );
-
-    if is_new_identity && args.recover.is_none() {
-        println!(
-            "\n================================================================================"
-        );
-        let (_seed, mnemonic_phrase) =
-            tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
-                .await
-                .expect("Mnemonic generation task failed");
-
-        if let Ok(mnemonic_path) = GutenbergMnemonic::save_mnemonic_to_ram(&mnemonic_phrase) {
-            println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
-            println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
-            println!("     {}", mnemonic_path.display());
-            println!("  -> Please inspect/copy the phrase securely (e.g. `cat {}`), then remove the file.", mnemonic_path.display());
-        }
-
-        use std::io::IsTerminal;
-        if std::io::stdout().is_terminal() {
-            println!("\n  ⚠️ RECOVERY PHRASE:");
-            println!("  \"{}\"", mnemonic_phrase);
-        }
-        println!(
-            "================================================================================\n"
-        );
-    }
 
     // 3. UPnP Port Forwarding & NAT Self-Diagnosis
     println!("[NET-02] Attempting UPnP Port Forwarding & NAT Reachability Diagnosis...");
@@ -397,7 +408,9 @@ async fn main() {
 
     if do_not_use_clearnet_peers {
         println!("\n  ⚠️ PRIVACY NOTICE: `do_not_use_clearnet_peers` is enabled. Suppressing clearnet seed connections.");
-        println!("  -> Note: Default genesis seed (therandomconsortium.org) is a clearnet address.");
+        println!(
+            "  -> Note: Default genesis seed (therandomconsortium.org) is a clearnet address."
+        );
         println!("  -> You MUST import an .onion or .i2p hidden service seed for the daemon to bootstrap!");
         seed_addrs.clear();
     }
@@ -406,7 +419,12 @@ async fn main() {
     let ephemeral_secret = EphemeralSecret::random_from_rng(rng);
     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
-    let handshake_frame = HandshakeInit::new(identity.signing_key(), &ephemeral_public, seed_mode, is_headless);
+    let handshake_frame = HandshakeInit::new(
+        identity.signing_key(),
+        &ephemeral_public,
+        seed_mode,
+        is_headless,
+    );
     let handshake_bytes = handshake_frame.to_bytes();
 
     for seed_addr in seed_addrs {

@@ -67,12 +67,27 @@ impl GutenbergMnemonic {
         }
         use std::io::Write;
         let mut writer = std::io::BufWriter::new(file);
-        writeln!(writer, "================================================================================")?;
-        writeln!(writer, "  🛡️ RANDOM CONSORTIUM DAEMON (randbotd) RECOVERY PHRASE")?;
-        writeln!(writer, "================================================================================")?;
-        writeln!(writer, "  Keep this 24-word Gutenberg recovery phrase secure!\n")?;
+        writeln!(
+            writer,
+            "================================================================================"
+        )?;
+        writeln!(
+            writer,
+            "  🛡️ RANDOM CONSORTIUM DAEMON (randbotd) RECOVERY PHRASE"
+        )?;
+        writeln!(
+            writer,
+            "================================================================================"
+        )?;
+        writeln!(
+            writer,
+            "  Keep this 24-word Gutenberg recovery phrase secure!\n"
+        )?;
         writeln!(writer, "{}\n", phrase)?;
-        writeln!(writer, "================================================================================")?;
+        writeln!(
+            writer,
+            "================================================================================"
+        )?;
         writer.flush()?;
         Ok(mnemonic_path)
     }

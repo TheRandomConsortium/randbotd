@@ -40,14 +40,6 @@ pub struct NodeIdentity {
 }
 
 impl NodeIdentity {
-    pub fn generate(role: NodeRole) -> Self {
-        let mut raw_secret = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut raw_secret);
-        let id = Self::from_seed_and_role(&raw_secret, role);
-        raw_secret.zeroize();
-        id
-    }
-
     pub fn from_seed_and_role(seed: &[u8; 32], role: NodeRole) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(role.domain_prefix());
@@ -190,7 +182,9 @@ pub fn resolve_master_secret(
                 return Ok(Zeroizing::new(trimmed.as_bytes().to_vec()));
             }
         }
-        return Ok(Zeroizing::new(b"randbotd_default_secure_kernel_fallback_key".to_vec()));
+        return Ok(Zeroizing::new(
+            b"randbotd_default_secure_kernel_fallback_key".to_vec(),
+        ));
     }
 
     Err(
@@ -239,8 +233,8 @@ fn fetch_kernel_keyring_secret() -> Option<Vec<u8>> {
 }
 
 fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
-    let params = Params::new(65536, 3, 1, Some(32))
-        .map_err(|e| format!("Argon2 params error: {}", e))?;
+    let params =
+        Params::new(65536, 3, 1, Some(32)).map_err(|e| format!("Argon2 params error: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut derived_key = Zeroizing::new([0u8; 32]);
@@ -257,7 +251,7 @@ pub mod tests {
 
     #[test]
     fn test_identity_encrypted_roundtrip() {
-        let identity = NodeIdentity::generate(NodeRole::Headless);
+        let identity = NodeIdentity::from_seed_and_role(&[0x77u8; 32], NodeRole::Headless);
         let path = std::env::temp_dir().join("randbotd_test_key.enc");
 
         identity
@@ -289,5 +283,30 @@ pub mod tests {
         );
         assert!(voter_id.is_voter());
         assert!(headless_id.is_headless());
+    }
+
+    #[test]
+    fn test_mnemonic_seed_identity_recovery_roundtrip() {
+        use crate::crypto::gutenberg::GutenbergMnemonic;
+
+        let fake_gutenberg_phrase =
+            "cypherpunk decentralized web web-of-trust encryption sovereign consensus";
+        let raw_seed = GutenbergMnemonic::phrase_to_seed(fake_gutenberg_phrase);
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(&raw_seed[..32]);
+
+        let original_id = NodeIdentity::from_seed_and_role(&seed_arr, NodeRole::Voter);
+
+        // Simulate recovery from phrase
+        let recovered_seed = GutenbergMnemonic::phrase_to_seed(fake_gutenberg_phrase);
+        let mut recovered_seed_arr = [0u8; 32];
+        recovered_seed_arr.copy_from_slice(&recovered_seed[..32]);
+        let recovered_id = NodeIdentity::from_seed_and_role(&recovered_seed_arr, NodeRole::Voter);
+
+        assert_eq!(
+            original_id.verifying_key().to_bytes(),
+            recovered_id.verifying_key().to_bytes(),
+            "Derived NodeIdentity key MUST match recovered Gutenberg phrase key!"
+        );
     }
 }

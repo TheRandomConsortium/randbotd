@@ -299,8 +299,11 @@ mod tests {
 
     #[test]
     fn test_handshake_init_roundtrip() {
-        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
-        let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
+        let identity = NodeIdentity::from_seed_and_role(
+            &[0x22u8; 32],
+            crate::crypto::identity::NodeRole::Voter,
+        );
+        let ephemeral_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
         let init = HandshakeInit::new(identity.signing_key(), &ephemeral_public, true, false);
@@ -316,8 +319,11 @@ mod tests {
 
     #[test]
     fn test_handshake_response_roundtrip() {
-        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
-        let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rand::thread_rng());
+        let identity = NodeIdentity::from_seed_and_role(
+            &[0x33u8; 32],
+            crate::crypto::identity::NodeRole::Voter,
+        );
+        let ephemeral_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
 
         let res = HandshakeResponse::new(identity.signing_key(), &ephemeral_public, true, true);

@@ -132,7 +132,12 @@ impl GossipRouter {
                     let rng = rand::rngs::OsRng;
                     let ephemeral_secret = EphemeralSecret::random_from_rng(rng);
                     let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
-                    HandshakeResponse::new(id.signing_key(), &ephemeral_public, is_seed, is_headless)
+                    HandshakeResponse::new(
+                        id.signing_key(),
+                        &ephemeral_public,
+                        is_seed,
+                        is_headless,
+                    )
                 };
                 let _ = socket.send_to(&response_frame.to_bytes(), src).await;
             }
@@ -246,7 +251,10 @@ mod tests {
         let phonebook = Arc::new(RwLock::new(Phonebook::new()));
         let router = GossipRouter::new(phonebook);
 
-        let identity = NodeIdentity::generate(crate::crypto::identity::NodeRole::Voter);
+        let identity = NodeIdentity::from_seed_and_role(
+            &[0x44u8; 32],
+            crate::crypto::identity::NodeRole::Voter,
+        );
         let msg = GossipMessage::new(
             identity.signing_key(),
             1,

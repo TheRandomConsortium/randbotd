@@ -70,7 +70,10 @@ impl DaemonConfig {
         for path in &candidates {
             if path.exists() {
                 if let Ok(cfg) = Self::load_from_file(path) {
-                    println!("  -> Loaded declarative configuration from {}", path.display());
+                    println!(
+                        "  -> Loaded declarative configuration from {}",
+                        path.display()
+                    );
                     return cfg;
                 }
             }
