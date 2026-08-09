@@ -43,7 +43,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `CA-07` | **Bad-Domain Purge Engine** | Allows CAs to actively revoke/purge UTW or abusive domains (enabling affected legitimate domains to perform early renewal/migration). | 🔴 |
 | `CA-08` | **Configurable Certificate Parameters (Custom TTL)** | Allows CAs to specify custom issuance parameters, such as custom certificate validity/TTL (Time-To-Live). | 🔴 |
 | `CA-09` | **Cryptographic Key Rotation & Remediation Engine** | Allows CAs to publish signed `KeyRotationProof` payloads to revoke compromised key material and reset standing key-compromise flags following market distrust strikes. | ⚪ |
-| `CA-10` | **Critical Custom X.509 OID Extension Engine (`randbotd-WoT-Validation-Extension`)** | Embeds a custom X.509 extension marked `critical = TRUE` using ITU-T X.667 decentralized UUID OID `2.25.332006307751889903095271628869501346770.1.1`. Forces standard un-augmented TLS stacks to reject the cert (preventing misuse outside the net without requiring central IANA PEN registration), enables browser extensions/proxies to spot native certs, and neutralizes stolen/unpaid certs both inside (blocked by P2P `TxKeyProof` consensus) and outside (blocked by RFC 5280 Critical OID semantics). | ⚪ |
+| `CA-10` | **Critical Custom X.509 OID Extension Engine (`randbotd-WoT-Validation-Extension`)** | Embeds a custom X.509 extension marked `critical = TRUE` using ITU-T X.667 decentralized UUID OID `2.25.332006307751889903095271628869501346770.1.1`. Ensures voluntary opt-in and prevents free-riding (un-augmented legacy browsers automatically reject native certs unless users explicitly install an extension or proxy daemon), enables client tools to spot native certs, and neutralizes stolen/unpaid certs both inside (blocked by P2P `TxKeyProof` consensus) and outside (blocked by RFC 5280 Critical OID semantics). | ⚪ |
 
 ---
 
@@ -85,7 +85,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `OUT-01` | **System Trust Store Substitution** | Engine allowing `randbotd` to substitute or augment default OS / browser trusted root certificate stores. | 🔴 |
 | `OUT-02` | **Foreign Certificate Ingestion** | Support for ingesting self-signed certificates, Caddy internal CA certs, and traditional ICANN certificates. | 🔴 |
 | `OUT-03` | **`out-of-net` Cryptographic Marking** | Mandatory tagging and isolation of foreign/ICANN/self-signed certs as `out-of-net` to distinguish them from native peer-voted `randbotd` CAs. | 🔴 |
-| `OUT-04` | **Browser Extension & Proxy OID Interceptor** | Companion extension/proxy layer that intercepts TLS handshakes containing the critical `randbotd` OID extension (`critical = TRUE`), routing verification through the local `randbotd` daemon via gRPC/REST (`ECO-04`) to validate P2P consensus state before overriding native browser rejection. | ⚪ |
+| `OUT-04` | **Browser Extension & Proxy Delegation Engine (Protocol Agnostic)** | Protocol-agnostic client delegation interface. `randbotd` provides consensus mathematics, WoT rating evaluation, and `out-of-net` classification without imposing rigid client parsing. Browser extensions and proxy plugins can either pre-filter via the critical OID (`2.25.332006307751889903095271628869501346770.1.1`) or delegate 100% of TLS certificate evaluation, store substitution, and consensus checking directly to the local `randbotd` daemon via gRPC/REST (`ECO-04`). | ⚪ |
 
 ---
 
