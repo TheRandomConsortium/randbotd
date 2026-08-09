@@ -73,6 +73,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `ACME-05` | **CA Operator Risk Floor Configurator** | Allowing CAs to set custom minimum reputation acceptance thresholds for domain issuance. | 🔴 |
 | `ACME-06` | **Emergency Default Fallback CA** | Provisions temporary, short-TTL certificates if a randomly matched P2P CA is currently offline, ensuring zero downtime while waiting for full issuance. | 🔴 |
 | `ACME-07` | **`--only-online` Filter Selection** | Client flag allowing domain owners to restrict fair-band matching strictly to active/online CAs for immediate cert issuance (lowers pool size). | 🔴 |
+| `ACME-08` | **Do-Not-Match (DNM) CA Exclusion Filter (`--dnm <CA_ID>`)** | Client flag during certificate allocation (`GetCert`) enabling domain owners to pass explicit CA exclusion filters (`--dnm`). Excludes flagged/distrusted CAs from fair-band matching. If no alternative candidate CAs exist in the domain's current free Fair-Band pool, allocation defaults back to the existing CA unless the domain owner raises their price ceiling (`account_price_ceiling`), driving organic demand for paid CA tiers. | ⚪ |
 
 ---
 
