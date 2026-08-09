@@ -42,6 +42,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🔴 |
 | `CA-07` | **Bad-Domain Purge Engine** | Allows CAs to actively revoke/purge UTW or abusive domains (enabling affected legitimate domains to perform early renewal/migration). | 🔴 |
 | `CA-08` | **Configurable Certificate Parameters (Custom TTL)** | Allows CAs to specify custom issuance parameters, such as custom certificate validity/TTL (Time-To-Live). | 🔴 |
+| `CA-09` | **Cryptographic Key Rotation & Remediation Engine** | Allows CAs to publish signed `KeyRotationProof` payloads to revoke compromised key material and reset standing key-compromise flags following market distrust strikes. | ⚪ |
 
 ---
 
@@ -56,6 +57,8 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `REP-05` | **CA Rating Propagation Engine** | Calculation of a CA's public rating as the weighted average of trust scores of all issued domains. | 🔴 |
 | `REP-06` | **Bi-Directional Image Cleaning** | Mechanisms for CAs to boost rating via domain revocations, and domains to recover from review-bomb strikes. | 🔴 |
 | `REP-07` | **Heuristic Cluster Ponderation Penalties** | Detects behavioral collusion rings and suspicious voting correlation. Invalid network interactions (e.g. fraudulent purges) degrade the voter ponderation of the offending node AND all heuristically linked cluster nodes. | 🔴 |
+| `REP-08` | **PoW User CA Flagging Engine (`Signal CA`)** | Allows end users to launch PoW-backed, weighted suspicion flags directly against CA identities. Does not immediately degrade CA trust score; decays exponentially via time half-life unless sustained. Triggers `NOTIF-01` domain inbox alerts upon crossing network threshold $T_{\text{warn}}$. | ⚪ |
+| `REP-09` | **Market Signal of Distrust & Early Renewal Punishment** | Enables domain owners to execute early cert renewals tagged with `reason: DistrustSignal`. Burns remaining TTL + ACME fee (replacing PoW) to issue a permanent, non-decaying direct UTW strike to the CA. Strike weight scales dynamically: $W_{\text{distrust}} = f(\text{TTL}_{\text{remaining}}, \text{Fee}_{\text{paid}}, \text{Flag}_{\text{level}})$. | ⚪ |
 
 ---
 
@@ -126,6 +129,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | **Vendor Lock-In** | Paid CAs attempt to force domain owners into recurring proprietary renewals. | Covered by **Pool Renewal & Price Ceilings** (`ACME-03`/`PAY-04`). Renewals are matched dynamically against the full fair-band CA pool with client-side `--free-only` and `account_price_ceiling` enforcement. |
 | **Purge Extortion / Rug-Pull** | CA takes payment then revokes certificate prematurely without justification. | Covered by **Anti-Purge Game Theory & Consensus Enforcement** (`PAY-06`). Prorated fee refunds are enforced mathematically; invalid purges are rejected by P2P consensus, keeping certs valid locally. |
 | **Collusion / Cluster Manipulation** | Coordinated node ring voting deceptively to shield a corrupt CA's rating. | Covered by **Heuristic Cluster Ponderation Penalties** (`REP-07`). Invalid network actions degrade the voter weight of the offending node AND all behaviorally correlated cluster nodes. |
+| **Rogue CA / Key Leak / Decryption Fraud** | CA exhibits infrastructure fraud, compromised keys, or unauthorized secret sharing. | Covered by **PoW User CA Flagging & Market Distrust Strikes** (`REP-08`/`REP-09`). Users raise decaying PoW flags alerting domain owners (`NOTIF-01`) who emit permanent non-decaying market distrust strikes by renewing early. Remediated via **Cryptographic Key Rotation** (`CA-09`). |
 
 ---
 

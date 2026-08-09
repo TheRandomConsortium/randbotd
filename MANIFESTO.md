@@ -86,6 +86,11 @@ Keeping `randbotd` lean is a deliberate architectural and philosophical choice. 
 * **Do-Not-Advertise IP Config (`do_not_advertise_ip`)**: Nodes seeking anonymity can instruct `randbotd` to suppress broadcasting their public IPv4/v6 addresses to the P2P swarm, advertising `.onion` or `.i2p` hidden service addresses exclusively.
 * **Overlay Peer Discovery & Phonebook Sharing**: Because Tor exit nodes and I2P outproxies strictly restrict unprompted inbound P2P connections to common client ports (`80`, `443`, `22`), traditional clearnet peer discovery sweeps fail. `randbotd` solves hidden node discovery through P2P phonebook (address book) list exchange between connected peers paired with explicit manual peer importing (`randbotctl peer import` / seed configs).
 
+### 7. Dual-Layer CA Accountability: Community Signaling & Economic Proof-of-Distrust
+* **User CA Flagging (`Signal / Flag CA`)**: End users evaluate CA infrastructure directly using Proof-of-Work (PoW) backed flags. User flags do not instantly alter a CA's baseline trust score, preventing mob review-bombing of innocent domains. Because user flags carry no direct financial cost, they decay exponentially over time unless continuously re-enacted by community PoW. Crossing a network flag threshold triggers proactive P2P inbox alerts (`NOTIF-01`) to all hosted domain owners.
+* **Economic Market Signals of Distrust**: Domain owners hold direct contracts with CAs. Upon receiving community warning flags or detecting CA misbehavior, a domain owner can execute an early certificate migration (`GetCert` with `reason: DistrustSignal`). By abandoning valid TTL and burning ACME issuance fees, the domain owner emits an un-forgeable **Market Signal of Distrust**. Money and TTL burn replace PoW, producing a permanent, non-decaying reputational strike against the CA. The strike weight scales dynamically: $W_{\text{distrust}} = f(\text{TTL}_{\text{remaining}}, \text{Fee}_{\text{paid}}, \text{Flag}_{\text{level}})$.
+* **Cryptographic Remediation**: CAs cannot passively wait out market distrust strikes. To remediate standing strikes, CAs must publish cryptographically verifiable **Key Rotation Proofs** (`KeyRotationProof`) revoking compromised key material, or attract high-reputation TW domains to stay and vouch for their infrastructure.
+
 ---
 
 ## 🌐 4. Our Pledge to the Future Web
