@@ -403,6 +403,26 @@ impl Database {
         result
     }
 
+    pub fn compute_originator_merkle_root(&self, originator: &[u8; 32]) -> Option<[u8; 32]> {
+        if let Ok(log) = self.event_log.read() {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            let mut count = 0;
+            for entry in log.iter().filter(|e| &e.originator == originator) {
+                hasher.update(entry.compute_hash());
+                count += 1;
+            }
+            if count == 0 {
+                return None;
+            }
+            let mut root = [0u8; 32];
+            root.copy_from_slice(&hasher.finalize());
+            Some(root)
+        } else {
+            None
+        }
+    }
+
     /// Evaluates peer range vectors against local DB to find local entries the peer is missing (bounded by max_entries)
     pub fn find_missing_entries_for_peer(
         &self,
@@ -424,7 +444,16 @@ impl Database {
                 break;
             }
             if let Some(peer_vec) = peer_map.get(&entry.originator) {
-                if !peer_vec.has_sequence(entry.seq) {
+                let local_root = self.compute_originator_merkle_root(&entry.originator);
+                let merkle_mismatch =
+                    peer_vec.merkle_root.is_some() && peer_vec.merkle_root != local_root;
+
+                if !peer_vec.has_sequence(entry.seq)
+                    || (merkle_mismatch
+                        && (entry.payload_type
+                            == crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+                            || entry.is_bullshit))
+                {
                     missing.push(entry.clone());
                 }
             } else {
