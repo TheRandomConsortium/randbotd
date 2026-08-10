@@ -429,6 +429,7 @@ impl Database {
         peer_vectors: &[crate::net::history::OriginatorRangeVector],
         max_entries: usize,
     ) -> Vec<EventLogEntry> {
+        use sha2::{Digest, Sha256};
         use std::collections::HashMap;
         let log = match self.event_log.read() {
             Ok(guard) => guard,
@@ -438,13 +439,30 @@ impl Database {
         let peer_map: HashMap<[u8; 32], &crate::net::history::OriginatorRangeVector> =
             peer_vectors.iter().map(|v| (v.originator, v)).collect();
 
+        // Single linear O(N) pass to precalculate per-originator local Merkle roots
+        let mut hasher_map: HashMap<[u8; 32], Sha256> = HashMap::new();
+        for entry in log.iter() {
+            hasher_map
+                .entry(entry.originator)
+                .or_default()
+                .update(entry.compute_hash());
+        }
+        let local_roots: HashMap<[u8; 32], [u8; 32]> = hasher_map
+            .into_iter()
+            .map(|(orig, hasher)| {
+                let mut root = [0u8; 32];
+                root.copy_from_slice(&hasher.finalize());
+                (orig, root)
+            })
+            .collect();
+
         let mut missing = Vec::new();
         for entry in log.iter() {
             if missing.len() >= max_entries {
                 break;
             }
             if let Some(peer_vec) = peer_map.get(&entry.originator) {
-                let local_root = self.compute_originator_merkle_root(&entry.originator);
+                let local_root = local_roots.get(&entry.originator).copied();
                 let merkle_mismatch =
                     peer_vec.merkle_root.is_some() && peer_vec.merkle_root != local_root;
 
