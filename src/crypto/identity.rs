@@ -11,6 +11,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use sha2::{Digest, Sha256};
 
+use crate::cli::Cli;
+use crate::crypto::gutenberg::GutenbergMnemonic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NodeRole {
     Voter = 1,
@@ -37,6 +40,114 @@ impl NodeRole {
 pub struct NodeIdentity {
     signing_key: SigningKey,
     role: NodeRole,
+}
+
+pub async fn init_node_identity(args: &Cli, base_state_dir: &Path) -> NodeIdentity {
+    println!("\n[NET-01] Initializing Encrypted Node Identity...");
+    let key_path = base_state_dir.join("node_key.enc");
+    let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
+
+    let target_role = if args.mode == "headless" {
+        NodeRole::Headless
+    } else {
+        NodeRole::Voter
+    };
+
+    if let Some(recover_phrase) = &args.recover {
+        println!("  -> Flag --recover passed: Recovering Node Identity from Gutenberg phrase...");
+        let raw_seed = GutenbergMnemonic::phrase_to_seed(recover_phrase);
+        if raw_seed.len() != 32 {
+            eprintln!("  -> FATAL ERROR: Invalid seed derived from phrase.");
+            std::process::exit(1);
+        }
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(&raw_seed);
+
+        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
+        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
+            eprintln!("  -> Warning: Could not save recovered key: {}", e);
+        } else {
+            println!(
+                "  -> Recovered Node Identity ({:?}) saved to {}",
+                target_role,
+                key_path.display()
+            );
+        }
+        id
+    } else if args.force_new || !key_path.exists() {
+        if args.force_new && key_path.exists() {
+            println!("  -> Flag --force-new passed: Replacing existing Node Identity keyfile.");
+        } else {
+            println!(
+                "  -> Generating new Ed25519 Node Identity ({:?})...",
+                target_role
+            );
+        }
+
+        println!("  -> Drilling Project Gutenberg entropy pool for 256-bit mnemonic seed...");
+        let (raw_seed, mnemonic_phrase) =
+            tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
+                .await
+                .expect("Mnemonic generation task failed");
+
+        if raw_seed.len() != 32 {
+            eprintln!("  -> FATAL ERROR: Invalid seed derived from Gutenberg entropy pool.");
+            std::process::exit(1);
+        }
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(&raw_seed[..32]);
+
+        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
+        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
+            eprintln!("  -> FATAL ERROR saving key file: {}", e);
+            std::process::exit(1);
+        } else {
+            println!(
+                "  -> Encrypted Node Identity ({:?}) derived from Gutenberg mnemonic saved to {}",
+                target_role,
+                key_path.display()
+            );
+        }
+
+        if let Ok(mnemonic_path) = GutenbergMnemonic::save_mnemonic_to_ram(&mnemonic_phrase) {
+            println!("\n================================================================================");
+            println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
+            println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
+            println!("     {}", mnemonic_path.display());
+            println!("  -> Please inspect/copy the phrase securely (e.g. `cat {}`), then remove the file.", mnemonic_path.display());
+        }
+
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            println!("\n  ⚠️ RECOVERY PHRASE:");
+            println!("  \"{}\"", mnemonic_phrase);
+        }
+        println!("================================================================延\n");
+
+        id
+    } else {
+        match NodeIdentity::load_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
+            Ok(id) => {
+                println!(
+                    "  -> Successfully loaded encrypted {:?} key from {}",
+                    id.role(),
+                    key_path.display()
+                );
+                if id.role() != target_role {
+                    println!(
+                        "  ⚠️ SECURITY NOTICE: Loaded key role is {:?}, running with CLI mode `{}`.",
+                        id.role(),
+                        args.mode
+                    );
+                }
+                id
+            }
+            Err(err) => {
+                eprintln!("  -> FATAL ERROR loading key file:\n{}", err);
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 impl NodeIdentity {

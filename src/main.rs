@@ -3,13 +3,15 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
+mod cli;
 mod config;
 mod crypto;
 mod net;
+mod storage;
 
+use cli::Cli;
 use config::DaemonConfig;
-use crypto::gutenberg::GutenbergMnemonic;
-use crypto::identity::{NodeIdentity, NodeRole};
+use crypto::identity::init_node_identity;
 use net::frame::validate_magic_bytes;
 use net::gossip::{
     AddressAnnouncementPayload, GossipMessage, DEFAULT_GOSSIP_TTL,
@@ -22,58 +24,6 @@ use net::router::GossipRouter;
 use rand::rngs::OsRng;
 use std::path::Path;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
-
-#[derive(Parser, Debug)]
-#[command(name = "randbotd", author = "The Random Consortium", version = "1.0.0")]
-struct Cli {
-    /// Path to TOML configuration file (defaults to /etc/randbotd/randbotd.toml or ./randbotd.toml)
-    #[arg(long)]
-    config: Option<String>,
-
-    /// Master passphrase for node private key decryption (optional for headless systemd mode)
-    #[arg(long)]
-    masterpass: Option<String>,
-
-    /// Node operation mode: daemon (default) or headless (systemd service)
-    #[arg(long, default_value = "daemon")]
-    mode: String,
-
-    /// Force generation of a new Node Identity, replacing any existing keyfile
-    #[arg(long)]
-    force_new: bool,
-
-    /// Recover Node Identity from a Gutenberg Mnemonic word phrase input
-    #[arg(long)]
-    recover: Option<String>,
-
-    /// P2P UDP listening port (overrides config file default 43210)
-    #[arg(long)]
-    port: Option<u16>,
-
-    /// Enable seed node mode to advertise high-uptime bootstrap availability
-    #[arg(long)]
-    seed: bool,
-
-    /// Explicit peer address to connect to (e.g. 127.0.0.1:43210)
-    #[arg(long)]
-    peer: Option<String>,
-
-    /// External public IP or domain address to advertise for inbound connections (e.g. therandomconsortium.org:43210)
-    #[arg(long)]
-    external_addr: Option<String>,
-
-    /// Directory path for state files (node_key.enc, peers.json). Defaults to STATE_DIRECTORY env var or "./"
-    #[arg(long)]
-    state_dir: Option<String>,
-
-    /// Suppress connecting to clearnet IPv4/v6 peers, requiring .onion or .i2p hidden seeds
-    #[arg(long)]
-    do_not_use_clearnet_peers: bool,
-
-    /// Allow falling back to /etc/machine-id for key encryption if no systemd/keyring masterpass is set
-    #[arg(long)]
-    allow_insecure_machine_id_fallback: bool,
-}
 
 #[tokio::main]
 async fn main() {
@@ -99,6 +49,33 @@ async fn main() {
             .network
             .do_not_use_clearnet_peers
             .unwrap_or(false);
+    let do_not_advertise_ip =
+        args.do_not_advertise_ip || daemon_cfg.network.do_not_advertise_ip.unwrap_or(false);
+
+    if do_not_advertise_ip {
+        println!("[NET-09] IP Privacy Enforcement Active (do_not_advertise_ip = true)");
+        if let Some(ref ext) = external_addr {
+            let is_overlay = ext.contains(".onion") || ext.contains(".i2p");
+            if !is_overlay {
+                println!(
+                    "  ⚠️ PRIVACY WARNING: do_not_advertise_ip is active, but external_addr '{}' is set to a raw IP or clearnet domain!",
+                    ext
+                );
+                println!("     DNS A/AAAA resolution and clearnet routing STILL reveal your public IP address to peers!");
+                println!("     To achieve total transport anonymity, set external_addr strictly to a .onion or .i2p hidden service address.\n");
+            } else {
+                println!(
+                    "  -> external_addr '{}' confirmed as overlay hidden service address.\n",
+                    ext
+                );
+            }
+        } else {
+            println!(
+                "  ⚠️ PRIVACY WARNING: do_not_advertise_ip is active, but no external_addr is set!"
+            );
+            println!("     P2P address announcements will be suppressed completely.\n");
+        }
+    }
 
     let tor_socks_proxy = daemon_cfg.privacy.tor_socks_proxy.clone();
     let i2p_proxy_port = daemon_cfg.privacy.i2p_proxy_port;
@@ -143,115 +120,7 @@ async fn main() {
     }
 
     // 2. Node Identity Key Loading / Generation / Recovery
-    println!("\n[NET-01] Initializing Encrypted Node Identity...");
-    let key_path = base_state_dir.join("node_key.enc");
-
-    // Interactive CLI mode allows fallback by default, whereas systemd/headless mode enforces strict security
-    let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
-
-    let target_role = if args.mode == "headless" {
-        NodeRole::Headless
-    } else {
-        NodeRole::Voter
-    };
-
-    let identity = if let Some(recover_phrase) = &args.recover {
-        println!("  -> Flag --recover passed: Recovering Node Identity from Gutenberg phrase...");
-        let raw_seed = GutenbergMnemonic::phrase_to_seed(recover_phrase);
-        if raw_seed.len() != 32 {
-            eprintln!("  -> FATAL ERROR: Invalid seed derived from phrase.");
-            std::process::exit(1);
-        }
-        let mut seed_arr = [0u8; 32];
-        seed_arr.copy_from_slice(&raw_seed);
-
-        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
-        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
-            eprintln!("  -> Warning: Could not save recovered key: {}", e);
-        } else {
-            println!(
-                "  -> Recovered Node Identity ({:?}) saved to {}",
-                target_role,
-                key_path.display()
-            );
-        }
-        id
-    } else if args.force_new || !key_path.exists() {
-        if args.force_new && key_path.exists() {
-            println!("  -> Flag --force-new passed: Replacing existing Node Identity keyfile.");
-        } else {
-            println!(
-                "  -> Generating new Ed25519 Node Identity ({:?})...",
-                target_role
-            );
-        }
-
-        println!("  -> Drilling Project Gutenberg entropy pool for 256-bit mnemonic seed...");
-        let (raw_seed, mnemonic_phrase) =
-            tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
-                .await
-                .expect("Mnemonic generation task failed");
-
-        if raw_seed.len() != 32 {
-            eprintln!("  -> FATAL ERROR: Invalid seed derived from Gutenberg entropy pool.");
-            std::process::exit(1);
-        }
-        let mut seed_arr = [0u8; 32];
-        seed_arr.copy_from_slice(&raw_seed[..32]);
-
-        let id = NodeIdentity::from_seed_and_role(&seed_arr, target_role);
-        if let Err(e) = id.save_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
-            eprintln!("  -> FATAL ERROR saving key file: {}", e);
-            std::process::exit(1);
-        } else {
-            println!(
-                "  -> Encrypted Node Identity ({:?}) derived from Gutenberg mnemonic saved to {}",
-                target_role,
-                key_path.display()
-            );
-        }
-
-        if let Ok(mnemonic_path) = GutenbergMnemonic::save_mnemonic_to_ram(&mnemonic_phrase) {
-            println!("\n================================================================================");
-            println!("  ⚠️ SECURITY NOTICE: Encrypted Node Identity key generated.");
-            println!("  -> To prevent recovery phrase exposure in journalctl logs, recovery phrase written to RAM:");
-            println!("     {}", mnemonic_path.display());
-            println!("  -> Please inspect/copy the phrase securely (e.g. `cat {}`), then remove the file.", mnemonic_path.display());
-        }
-
-        use std::io::IsTerminal;
-        if std::io::stdout().is_terminal() {
-            println!("\n  ⚠️ RECOVERY PHRASE:");
-            println!("  \"{}\"", mnemonic_phrase);
-        }
-        println!(
-            "================================================================================\n"
-        );
-
-        id
-    } else {
-        match NodeIdentity::load_encrypted(&key_path, args.masterpass.as_deref(), allow_fallback) {
-            Ok(id) => {
-                println!(
-                    "  -> Successfully loaded encrypted {:?} key from {}",
-                    id.role(),
-                    key_path.display()
-                );
-                if id.role() != target_role {
-                    println!(
-                        "  ⚠️ SECURITY NOTICE: Loaded key role is {:?}, running with CLI mode `{}`.",
-                        id.role(),
-                        args.mode
-                    );
-                }
-                id
-            }
-            Err(err) => {
-                eprintln!("  -> FATAL ERROR loading key file:\n{}", err);
-                std::process::exit(1);
-            }
-        }
-    };
+    let identity = init_node_identity(&args, &base_state_dir).await;
 
     println!(
         "  -> Node Public Key: {:02x?} [Role: {:?}, Voter: {}]",
@@ -303,6 +172,30 @@ async fn main() {
     };
     let shared_phonebook = Arc::new(RwLock::new(phonebook));
 
+    // 4.1. Initialize Transactional Embedded Database (NET-04)
+    let db = match storage::db::Database::open(&base_state_dir) {
+        Ok(database) => {
+            println!(
+                "  -> Transactional Database initialized in {}",
+                base_state_dir.display()
+            );
+            Arc::new(database)
+        }
+        Err(e) => {
+            eprintln!(
+                "  -> FATAL ERROR initializing database in {}: {}",
+                base_state_dir.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // 4.2. Spawn Local Daemon IPC Control Server (NET-08)
+    let ipc_socket_path = base_state_dir.join("randbotd.sock");
+    let ipc_server = net::ipc::IpcServer::new(ipc_socket_path, shared_phonebook.clone());
+    let _ipc_handle = ipc_server.spawn();
+
     // Broadcast AddressAnnouncement Payload
     let external_addr_str = external_addr.unwrap_or_else(|| format!("127.0.0.1:{}", port));
     let addr_announcement = AddressAnnouncementPayload::new(&external_addr_str, seed_mode);
@@ -340,7 +233,10 @@ async fn main() {
         }
     };
 
-    let router = Arc::new(GossipRouter::new(shared_phonebook.clone()));
+    let router = Arc::new(GossipRouter::with_database(
+        shared_phonebook.clone(),
+        db.clone(),
+    ));
 
     // Spawn async P2P packet listener loop
     let listener_socket = socket.clone();
@@ -427,13 +323,26 @@ async fn main() {
     );
     let handshake_bytes = handshake_frame.to_bytes();
 
+    let get_peers_payload =
+        serde_json::to_vec(&crate::net::gossip::GetPeersRequest).unwrap_or_default();
+    let get_peers_init_msg = GossipMessage::new(
+        identity.signing_key(),
+        100,
+        1,
+        crate::net::gossip::PAYLOAD_TYPE_GET_PEERS_REQ,
+        get_peers_payload,
+    );
+
     for seed_addr in seed_addrs {
         println!(
-            "  -> Sending HandshakeInit frame to seed `{}`...",
+            "  -> Sending HandshakeInit frame & GetPeersRequest to seed `{}`...",
             seed_addr
         );
         router.add_peer(seed_addr);
         let _ = socket.send_to(&handshake_bytes, seed_addr).await;
+        let _ = socket
+            .send_to(&get_peers_init_msg.to_bytes(), seed_addr)
+            .await;
     }
 
     // 7. Broadcast Signed Address Announcement to Swarm (only if --external-addr is configured)

@@ -113,6 +113,41 @@ impl Phonebook {
         }
         addrs
     }
+
+    pub fn add_peer(&mut self, address: String) {
+        let addr_key = address.clone();
+        self.peers.entry(addr_key).or_insert_with(|| PeerEntry {
+            pubkey_hex: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            address,
+            last_seen: current_timestamp(),
+            self_declared_seed: false,
+            verified_seed: false,
+            ponderation_score: 50,
+        });
+    }
+
+    #[allow(dead_code)]
+    pub fn all_peers(&self) -> Vec<String> {
+        self.peers.keys().cloned().collect()
+    }
+
+    /// Randomly samples up to `max_count` (e.g. 8) active peer addresses from local phonebook map
+    pub fn sample_random_peers(&self, max_count: usize, exclude_peer: &str) -> Vec<String> {
+        use rand::seq::SliceRandom;
+
+        let mut candidates: Vec<String> = self
+            .peers
+            .keys()
+            .filter(|&addr| addr != exclude_peer)
+            .cloned()
+            .collect();
+
+        let mut rng = rand::thread_rng();
+        candidates.shuffle(&mut rng);
+        candidates.truncate(max_count);
+        candidates
+    }
 }
 
 fn current_timestamp() -> u64 {
@@ -137,5 +172,17 @@ mod tests {
         let seed = pb.peers.get(DEFAULT_SEED_DOMAIN).unwrap();
         assert!(seed.verified_seed);
         assert!(seed.self_declared_seed);
+    }
+
+    #[test]
+    fn test_phonebook_sample_random_peers() {
+        let mut pb = Phonebook::new();
+        for i in 1..=15 {
+            pb.add_peer(format!("192.168.1.{}:43210", i));
+        }
+
+        let sampled = pb.sample_random_peers(8, "192.168.1.1:43210");
+        assert!(sampled.len() <= 8);
+        assert!(!sampled.contains(&"192.168.1.1:43210".to_string()));
     }
 }

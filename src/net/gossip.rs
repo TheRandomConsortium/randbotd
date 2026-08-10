@@ -4,12 +4,48 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::net::frame::MAGIC_BYTES;
 
-pub const PAYLOAD_TYPE_VOTE: u8 = 1;
-pub const PAYLOAD_TYPE_CA_DECLARATION: u8 = 2;
-pub const PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT: u8 = 3;
-pub const PAYLOAD_TYPE_PING: u8 = 4;
+pub const PAYLOAD_TYPE_PING: u8 = 0;
+pub const PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT: u8 = 1;
+pub const PAYLOAD_TYPE_VOTE: u8 = 2;
+pub const PAYLOAD_TYPE_CA_DECLARATION: u8 = 3;
+pub const PAYLOAD_TYPE_GET_PEERS_REQ: u8 = 5;
+pub const PAYLOAD_TYPE_GET_PEERS_RESP: u8 = 6;
+pub const PAYLOAD_TYPE_REFLECT_ADDR_REQ: u8 = 7;
+pub const PAYLOAD_TYPE_REFLECT_ADDR_RESP: u8 = 8;
+pub const PAYLOAD_TYPE_RANGE_SYNC_REQ: u8 = 9;
+pub const PAYLOAD_TYPE_RANGE_SYNC_RESP: u8 = 10;
+pub const PAYLOAD_TYPE_MERKLE_DRILL_REQ: u8 = 11;
+pub const PAYLOAD_TYPE_MERKLE_DRILL_RESP: u8 = 12;
 
 pub const DEFAULT_GOSSIP_TTL: u8 = 8;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GetPeersRequest;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GetPeersResponse {
+    pub peers: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+pub struct AddressReflectionRequest;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AddressReflectionResponse {
+    pub reflected_addr: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RangeSyncRequest {
+    pub vector: Vec<crate::net::history::OriginatorRangeVector>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RangeSyncResponse {
+    pub entries_for_peer: Vec<crate::net::history::EventLogEntry>,
+    pub my_vector: Vec<crate::net::history::OriginatorRangeVector>,
+}
 
 #[derive(Debug, Clone)]
 pub struct GossipMessage {
