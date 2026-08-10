@@ -111,12 +111,33 @@ impl Database {
         Ok(())
     }
 
+    fn rewrite_disk_file(&self, log: &[EventLogEntry]) -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&self.db_file_path)
+            .map_err(|e| format!("Failed to open DB file for rewriting: {}", e))?;
+
+        for entry in log {
+            let json_line = serde_json::to_string(entry)
+                .map_err(|e| format!("Failed to serialize EventLogEntry: {}", e))?;
+            writeln!(file, "{}", json_line)
+                .map_err(|e| format!("Failed to write event line to DB: {}", e))?;
+        }
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync DB file to disk: {}", e))?;
+        Ok(())
+    }
+
     pub fn get_originator_reputation(&self, originator: &[u8; 32]) -> (usize, usize) {
         if let Ok(log) = self.event_log.read() {
             let mut valid = 0;
             let mut bullshit = 0;
             for e in log.iter().filter(|e| &e.originator == originator) {
-                if e.is_bullshit {
+                if e.is_bullshit
+                    || e.payload_type == crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+                {
                     bullshit += 1;
                 } else {
                     valid += 1;
@@ -128,7 +149,7 @@ impl Database {
         }
     }
 
-    /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging & bullshit event marking)
+    /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging, truth resolution & equivocation proofs)
     pub fn append_event(&self, entry: EventLogEntry) -> Result<(), String> {
         if EventLogEntry::is_transient(entry.payload_type) {
             return Err(format!(
@@ -180,6 +201,65 @@ impl Database {
         }
 
         if entry.seq < expected_seq {
+            // Check for Equivocation (Double Signing / Bullshit Override)
+            let existing_idx = log
+                .iter()
+                .position(|e| e.originator == entry.originator && e.seq == entry.seq);
+
+            if let Some(idx) = existing_idx {
+                let existing = log[idx].clone();
+                if existing.compute_hash() == entry.compute_hash() {
+                    return Ok(());
+                }
+
+                println!(
+                    "  ⚔️ [Anti-Entropy DB] Equivocation detected for node {:02x?} at sequence {}!",
+                    &entry.originator[..4],
+                    entry.seq
+                );
+
+                let proof_payload = serde_json::to_vec(&crate::net::gossip::EquivocationProof {
+                    originator: entry.originator,
+                    conflicting_event_a: existing.clone(),
+                    conflicting_event_b: entry.clone(),
+                    reason: format!("Equivocation detected at sequence {}", entry.seq),
+                })
+                .unwrap_or_default();
+
+                let canonical_prev_hash = if entry.seq == 1 {
+                    [0u8; 32]
+                } else {
+                    log.iter()
+                        .rev()
+                        .find(|e| e.originator == entry.originator && e.seq == entry.seq - 1)
+                        .map(|e| e.compute_hash())
+                        .unwrap_or([0u8; 32])
+                };
+
+                let existing_was_bullshit = existing.is_bullshit;
+                let incoming_is_valid = entry.prev_hash == canonical_prev_hash;
+
+                if existing_was_bullshit && incoming_is_valid {
+                    println!(
+                        "  ✨ [Anti-Entropy DB] Replacing bullshit seq {} for node {:02x?} with valid truth!",
+                        entry.seq,
+                        &entry.originator[..4]
+                    );
+                    log[idx] = entry.clone();
+                    self.rewrite_disk_file(&log)?;
+                }
+
+                let proof_entry = EventLogEntry {
+                    seq: expected_seq,
+                    prev_hash: expected_prev_hash,
+                    originator: entry.originator,
+                    payload_type: crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF,
+                    payload: proof_payload,
+                    signature_bytes: entry.signature_bytes.clone(),
+                    is_bullshit: true,
+                };
+                self.persist_and_append_entry(&mut log, proof_entry)?;
+            }
             return Ok(());
         }
 

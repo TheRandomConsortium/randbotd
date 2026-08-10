@@ -234,3 +234,81 @@ fn test_database_max_staged_events_oom_prevention() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[test]
+fn test_database_equivocation_truth_resolution() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("randbotd_db_eq_truth_{}", rand::random::<u64>()));
+    let db = Database::open(&temp_dir).expect("Failed to open DB");
+
+    let secret = [0x0Du8; 32];
+    let signing_key = SigningKey::from_bytes(&secret);
+    let originator = signing_key.verifying_key().to_bytes();
+
+    // 1. Valid seq 1
+    let mut d1 = Vec::new();
+    d1.extend_from_slice(&1u64.to_be_bytes());
+    d1.extend_from_slice(&[0u8; 32]);
+    d1.push(0x02);
+    d1.extend_from_slice(b"seq1");
+    let sig1 = signing_key.sign(&d1).to_bytes().to_vec();
+    let e1 = EventLogEntry::new(1, [0u8; 32], originator, 0x02, b"seq1".to_vec(), sig1).unwrap();
+    let h1 = e1.compute_hash();
+    assert!(db.append_event(e1).is_ok());
+
+    // 2. Bullshit seq 2 (fake prev_hash)
+    let mut d2_bs = Vec::new();
+    d2_bs.extend_from_slice(&2u64.to_be_bytes());
+    d2_bs.extend_from_slice(&[0xEEu8; 32]); // Fake prev_hash!
+    d2_bs.push(0x02);
+    d2_bs.extend_from_slice(b"bs_seq2");
+    let sig2_bs = signing_key.sign(&d2_bs).to_bytes().to_vec();
+    let e2_bs = EventLogEntry::new(
+        2,
+        [0xEEu8; 32],
+        originator,
+        0x02,
+        b"bs_seq2".to_vec(),
+        sig2_bs,
+    )
+    .unwrap();
+    assert!(db.append_event(e2_bs).is_ok());
+
+    // Verify bs_seq2 was ingested as bullshit
+    {
+        let log = db.event_log.read().unwrap();
+        assert_eq!(log.len(), 2);
+        assert!(log[1].is_bullshit);
+    }
+
+    // 3. True seq 2 arrives (valid prev_hash = h1)
+    let mut d2_true = Vec::new();
+    d2_true.extend_from_slice(&2u64.to_be_bytes());
+    d2_true.extend_from_slice(&h1); // Valid prev_hash!
+    d2_true.push(0x02);
+    d2_true.extend_from_slice(b"true_seq2");
+    let sig2_true = signing_key.sign(&d2_true).to_bytes().to_vec();
+    let e2_true =
+        EventLogEntry::new(2, h1, originator, 0x02, b"true_seq2".to_vec(), sig2_true).unwrap();
+    let h2_true = e2_true.compute_hash();
+    assert!(db.append_event(e2_true).is_ok());
+
+    // Verify Truth Resolution & EquivocationProof recorded!
+    {
+        let log = db.event_log.read().unwrap();
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[1].seq, 2);
+        assert_eq!(log[1].compute_hash(), h2_true); // Truth replaced bullshit at index 1!
+        assert!(!log[1].is_bullshit); // Valid truth!
+        assert_eq!(
+            log[2].payload_type,
+            crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+        ); // Proof recorded!
+    }
+
+    let (valid, bs) = db.get_originator_reputation(&originator);
+    assert_eq!(valid, 2); // seq 1 + seq 2 true
+    assert_eq!(bs, 1); // EquivocationProof penalty!
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
