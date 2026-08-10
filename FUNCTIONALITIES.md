@@ -37,7 +37,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | :--- | :--- | :--- | :---: |
 | `CA-01` | **Custom Subject Metadata Engine** | Configurable creation of root/intermediate CAs with custom Subject Name, Emissor, O, and OU fields. | 🔴 |
 | `CA-02` | **Cryptographic Agility Suite** | Multi-algorithm key generation and certificate signing: RSA-4096, ECDSA P-384, and Ed25519. | 🔴 |
-| `CA-03` | **Multi-Network Domain Proofs** | Verification of domain control via DNS TXT, Handshake record, Tor HTTP/TLS-ALPN, and I2P LeaseSets. | 🔴 |
+| `CA-03` | **Multi-Network Domain Proofs** | Verification of domain control via DNS TXT, Handshake record, Tor HTTP/TLS-ALPN, and I2P LeaseSets. A CA must have the corresponding daemon configured (`tor`/`i2p`/`hnsd`) to advertise support for that proof method — advertising a network type without a working backend is rejected at startup. Includes an **HTTP Nonce Fallback** for operators without direct access to their DNS zone (clearnet or Handshake): the CA emits a short-lived nonce, the node signs it with its P2P Ed25519 identity key and serves the signature under a well-known path (e.g. `/.well-known/randbotd-proof`); the CA fetches and verifies the signature against the known node public key, providing a cryptographically safe proof of domain control without DNS access. | 🔴 |
 | `CA-04` | **P2P Cert Chain Broadcasting** | Automated broadcast of published CAs, intermediate cert chains, and CRLs across the P2P swarm. | 🔴 |
 | `CA-05` | **X.509 Certificate Builder** | Standard-compliant X.509 v3 certificate builder with custom extensions for WoT signatures. | 🔴 |
 | `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🔴 |
@@ -45,6 +45,20 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `CA-08` | **Configurable Certificate Parameters (Custom TTL)** | Allows CAs to specify custom issuance parameters, such as custom certificate validity/TTL (Time-To-Live). | 🔴 |
 | `CA-09` | **Cryptographic Key Rotation & Remediation Engine** | Allows CAs to publish signed `KeyRotationProof` payloads to revoke compromised key material and reset standing key-compromise flags following market distrust strikes. | ⚪ |
 | `CA-10` | **Critical Custom X.509 OID Extension Engine (`randbotd-WoT-Validation-Extension`)** | Embeds a custom X.509 extension marked `critical = TRUE` using ITU-T X.667 decentralized UUID OID `2.25.332006307751889903095271628869501346770.1.1`. Ensures voluntary opt-in and prevents free-riding (un-augmented legacy browsers automatically reject native certs unless users explicitly install an extension or proxy daemon), enables client tools to spot native certs, and neutralizes stolen/unpaid certs both inside (blocked by P2P `TxKeyProof` consensus) and outside (blocked by RFC 5280 Critical OID semantics). | ⚪ |
+
+
+### 📋 CA Module Implementation Order
+
+Implementation phases, ordered by dependency and foundational priority:
+
+| Phase | Features | Rationale |
+| :--- | :--- | :--- |
+| **Phase 1** | `CA-01`, `CA-02`, `CA-03`, `CA-08`, `CA-10` | Core identity and proof primitives. CA creation, cryptographic key generation, domain proof engine (with capability enforcement + HTTP nonce fallback), custom TTL parameters, and the WoT critical OID extension. No CA can be issued or trusted without these foundations. |
+| **Phase 2** | `CA-05` | X.509 certificate builder depends on Phase 1 keys, proof results, TTL parameters, and the WoT OID extension being fully defined. |
+| **Phase 3** | `CA-04`, `CA-07`, `CA-09` | P2P broadcast, bad-domain purge, and key rotation all depend on valid certificates existing in the system and the cert builder being operational. |
+| **Phase 4** | `CA-06` | Dashboard and control plane are the operational layer built on top of a fully working CA engine. |
+
+> **Architectural note (OCP):** The CA issuance pipeline must be designed open for extension, closed for modification. `PAY-01` (CA Optional Service Fee Publisher) will slot optional pricing into the CA engine without altering core issuance logic — keep the CA data structures and issuance flow decoupled from payment so that adding a `price` field or fee validation step requires no rewrites.
 
 ---
 
