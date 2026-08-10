@@ -170,7 +170,10 @@ impl Database {
         let (expected_seq, expected_prev_hash) = log
             .iter()
             .rev()
-            .find(|e| e.originator == entry.originator)
+            .find(|e| {
+                e.originator == entry.originator
+                    && e.payload_type != crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+            })
             .map(|e| (e.seq + 1, e.compute_hash()))
             .unwrap_or((1, [0u8; 32]));
 
@@ -202,9 +205,11 @@ impl Database {
 
         if entry.seq < expected_seq {
             // Check for Equivocation (Double Signing / Bullshit Override)
-            let existing_idx = log
-                .iter()
-                .position(|e| e.originator == entry.originator && e.seq == entry.seq);
+            let existing_idx = log.iter().position(|e| {
+                e.originator == entry.originator
+                    && e.seq == entry.seq
+                    && e.payload_type != crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+            });
 
             if let Some(idx) = existing_idx {
                 let existing = log[idx].clone();
@@ -231,7 +236,12 @@ impl Database {
                 } else {
                     log.iter()
                         .rev()
-                        .find(|e| e.originator == entry.originator && e.seq == entry.seq - 1)
+                        .find(|e| {
+                            e.originator == entry.originator
+                                && e.seq == entry.seq - 1
+                                && e.payload_type
+                                    != crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+                        })
                         .map(|e| e.compute_hash())
                         .unwrap_or([0u8; 32])
                 };
@@ -250,8 +260,8 @@ impl Database {
                 }
 
                 let proof_entry = EventLogEntry {
-                    seq: expected_seq,
-                    prev_hash: expected_prev_hash,
+                    seq: entry.seq,
+                    prev_hash: [0u8; 32],
                     originator: entry.originator,
                     payload_type: crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF,
                     payload: proof_payload,

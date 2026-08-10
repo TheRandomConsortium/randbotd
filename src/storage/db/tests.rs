@@ -303,11 +303,35 @@ fn test_database_equivocation_truth_resolution() {
         assert_eq!(
             log[2].payload_type,
             crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
-        ); // Proof recorded!
+        );
+    }
+    let mut d3_true = Vec::new();
+    d3_true.extend_from_slice(&3u64.to_be_bytes());
+    d3_true.extend_from_slice(&h2_true); // Valid prev_hash linking to true seq 2!
+    d3_true.push(0x02);
+    d3_true.extend_from_slice(b"true_seq3");
+    let sig3_true = signing_key.sign(&d3_true).to_bytes().to_vec();
+    let e3_true = EventLogEntry::new(
+        3,
+        h2_true,
+        originator,
+        0x02,
+        b"true_seq3".to_vec(),
+        sig3_true,
+    )
+    .unwrap();
+    assert!(db.append_event(e3_true).is_ok());
+
+    {
+        let log = db.event_log.read().unwrap();
+        assert_eq!(log.len(), 4);
+        assert_eq!(log[3].seq, 3);
+        assert_eq!(log[3].prev_hash, h2_true);
+        assert!(!log[3].is_bullshit); // Valid seq 3!
     }
 
     let (valid, bs) = db.get_originator_reputation(&originator);
-    assert_eq!(valid, 2); // seq 1 + seq 2 true
+    assert_eq!(valid, 3); // seq 1 + seq 2 true + seq 3 true
     assert_eq!(bs, 1); // EquivocationProof penalty!
 
     let _ = std::fs::remove_dir_all(temp_dir);
