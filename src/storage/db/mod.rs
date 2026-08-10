@@ -7,6 +7,8 @@ use std::sync::RwLock;
 
 pub mod merkle;
 
+pub const MAX_STAGED_EVENTS: usize = 50;
+
 type MerkleCacheMap = RwLock<
     std::collections::HashMap<([u8; 32], crate::net::history::SequenceRange), Option<[u8; 32]>>,
 >;
@@ -109,7 +111,24 @@ impl Database {
         Ok(())
     }
 
-    /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging & auto-promotion)
+    pub fn get_originator_reputation(&self, originator: &[u8; 32]) -> (usize, usize) {
+        if let Ok(log) = self.event_log.read() {
+            let mut valid = 0;
+            let mut bullshit = 0;
+            for e in log.iter().filter(|e| &e.originator == originator) {
+                if e.is_bullshit {
+                    bullshit += 1;
+                } else {
+                    valid += 1;
+                }
+            }
+            (valid, bullshit)
+        } else {
+            (0, 0)
+        }
+    }
+
+    /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging & bullshit event marking)
     pub fn append_event(&self, entry: EventLogEntry) -> Result<(), String> {
         if EventLogEntry::is_transient(entry.payload_type) {
             return Err(format!(
@@ -137,6 +156,15 @@ impl Database {
         if entry.seq > expected_seq {
             if let Ok(mut pending) = self.pending_unverified.write() {
                 let staged_list = pending.entry(entry.originator).or_default();
+                if staged_list.len() >= MAX_STAGED_EVENTS {
+                    eprintln!(
+                        "  ⚠️ [Anti-Entropy DB] Staging buffer full ({}) for node {:02x?}, dropping seq {}",
+                        MAX_STAGED_EVENTS,
+                        &entry.originator[..4],
+                        entry.seq
+                    );
+                    return Ok(());
+                }
                 if !staged_list.iter().any(|e| e.seq == entry.seq) {
                     staged_list.push(entry.clone());
                     staged_list.sort_by_key(|e| e.seq);
@@ -155,42 +183,44 @@ impl Database {
             return Ok(());
         }
 
-        if entry.prev_hash != expected_prev_hash {
-            return Err(format!(
-                "Per-originator prev_hash link mismatch for node {:02x?}",
-                &entry.originator[..4]
-            ));
+        let mut final_entry = entry;
+        if final_entry.prev_hash != expected_prev_hash {
+            final_entry.is_bullshit = true;
+            println!(
+                "  💩 [Anti-Entropy DB] Ingesting bullshit event seq {} for originator {:02x?} (prev_hash link mismatch!)",
+                final_entry.seq,
+                &final_entry.originator[..4]
+            );
         }
 
-        self.persist_and_append_entry(&mut log, entry.clone())?;
+        self.persist_and_append_entry(&mut log, final_entry.clone())?;
 
         // DRAIN & AUTO-PROMOTE STAGED ITEMS for this originator!
         if let Ok(mut pending) = self.pending_unverified.write() {
-            if let Some(staged_list) = pending.get_mut(&entry.originator) {
-                let mut current_expected_seq = entry.seq + 1;
-                let mut current_prev_hash = entry.compute_hash();
+            if let Some(staged_list) = pending.get_mut(&final_entry.originator) {
+                let mut current_expected_seq = final_entry.seq + 1;
+                let mut current_prev_hash = final_entry.compute_hash();
 
                 while !staged_list.is_empty() && staged_list[0].seq == current_expected_seq {
-                    let next_item = staged_list.remove(0);
-                    if next_item.prev_hash == current_prev_hash {
-                        if let Ok(()) = self.persist_and_append_entry(&mut log, next_item.clone()) {
-                            println!(
-                                "  ⚡ [Anti-Entropy DB] Auto-promoted staged event seq {} for node {:02x?}",
-                                next_item.seq,
-                                &next_item.originator[..4]
-                            );
-                            current_expected_seq = next_item.seq + 1;
-                            current_prev_hash = next_item.compute_hash();
-                        } else {
-                            break;
-                        }
-                    } else {
-                        eprintln!(
-                            "  ⚠️ [Anti-Entropy DB] Staged event seq {} for node {:02x?} failed prev_hash link verification! Discarding broken staged chain.",
+                    let mut next_item = staged_list.remove(0);
+                    if next_item.prev_hash != current_prev_hash {
+                        next_item.is_bullshit = true;
+                        println!(
+                            "  💩 [Anti-Entropy DB] Auto-promoting bullshit staged event seq {} for originator {:02x?} (link mismatch!)",
                             next_item.seq,
                             &next_item.originator[..4]
                         );
-                        staged_list.clear();
+                    } else {
+                        println!(
+                            "  ⚡ [Anti-Entropy DB] Auto-promoted valid staged event seq {} for node {:02x?}",
+                            next_item.seq,
+                            &next_item.originator[..4]
+                        );
+                    }
+                    if let Ok(()) = self.persist_and_append_entry(&mut log, next_item.clone()) {
+                        current_expected_seq = next_item.seq + 1;
+                        current_prev_hash = next_item.compute_hash();
+                    } else {
                         break;
                     }
                 }
@@ -317,169 +347,4 @@ impl Database {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
-
-    #[test]
-    fn test_database_event_log_roundtrip() {
-        use rand::RngCore;
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_db_test_{}", rand::random::<u64>()));
-        let db = Database::open(&temp_dir).expect("Failed to open DB");
-
-        let mut secret = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut secret);
-        let signing_key = SigningKey::from_bytes(&secret);
-        let originator = signing_key.verifying_key().to_bytes();
-
-        let seq = 1u64;
-        let prev_hash = [0x00u8; 32];
-        let payload_type = 0x02u8;
-        let payload = b"TW_vote_db_test".to_vec();
-
-        let mut signed_data = Vec::new();
-        signed_data.extend_from_slice(&seq.to_be_bytes());
-        signed_data.extend_from_slice(&prev_hash);
-        signed_data.push(payload_type);
-        signed_data.extend_from_slice(&payload);
-        let sig_bytes = signing_key.sign(&signed_data).to_bytes().to_vec();
-
-        let entry =
-            EventLogEntry::new(seq, prev_hash, originator, payload_type, payload, sig_bytes)
-                .unwrap();
-        assert!(db.append_event(entry).is_ok());
-
-        let loaded_db = Database::open(&temp_dir).expect("Failed to re-open DB");
-        let log = loaded_db.event_log.read().unwrap();
-        assert_eq!(log.len(), 1);
-        assert_eq!(log[0].seq, 1);
-
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[test]
-    fn test_database_per_originator_interleaved_events() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_db_interleaved_{}", rand::random::<u64>()));
-        let db = Database::open(&temp_dir).expect("Failed to open DB");
-
-        let secret_a = [0x01u8; 32];
-        let signing_key_a = SigningKey::from_bytes(&secret_a);
-        let originator_a = signing_key_a.verifying_key().to_bytes();
-
-        let secret_b = [0x02u8; 32];
-        let signing_key_b = SigningKey::from_bytes(&secret_b);
-        let originator_b = signing_key_b.verifying_key().to_bytes();
-
-        let mut data_a1 = Vec::new();
-        data_a1.extend_from_slice(&1u64.to_be_bytes());
-        data_a1.extend_from_slice(&[0u8; 32]);
-        data_a1.push(0x02);
-        data_a1.extend_from_slice(b"vote_a1");
-        let sig_a1 = signing_key_a.sign(&data_a1).to_bytes().to_vec();
-        let entry_a1 = EventLogEntry::new(
-            1,
-            [0u8; 32],
-            originator_a,
-            0x02,
-            b"vote_a1".to_vec(),
-            sig_a1,
-        )
-        .unwrap();
-        db.append_event(entry_a1.clone()).unwrap();
-
-        let mut data_b1 = Vec::new();
-        data_b1.extend_from_slice(&1u64.to_be_bytes());
-        data_b1.extend_from_slice(&[0u8; 32]);
-        data_b1.push(0x02);
-        data_b1.extend_from_slice(b"vote_b1");
-        let sig_b1 = signing_key_b.sign(&data_b1).to_bytes().to_vec();
-        let entry_b1 = EventLogEntry::new(
-            1,
-            [0u8; 32],
-            originator_b,
-            0x02,
-            b"vote_b1".to_vec(),
-            sig_b1,
-        )
-        .unwrap();
-        db.append_event(entry_b1).unwrap();
-
-        let prev_hash_a1 = entry_a1.compute_hash();
-        let mut data_a2 = Vec::new();
-        data_a2.extend_from_slice(&2u64.to_be_bytes());
-        data_a2.extend_from_slice(&prev_hash_a1);
-        data_a2.push(0x02);
-        data_a2.extend_from_slice(b"vote_a2");
-        let sig_a2 = signing_key_a.sign(&data_a2).to_bytes().to_vec();
-        let entry_a2 = EventLogEntry::new(
-            2,
-            prev_hash_a1,
-            originator_a,
-            0x02,
-            b"vote_a2".to_vec(),
-            sig_a2,
-        )
-        .unwrap();
-        db.append_event(entry_a2).unwrap();
-
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[test]
-    fn test_database_out_of_order_staging_and_autopromote() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_db_ooo_{}", rand::random::<u64>()));
-        let db = Database::open(&temp_dir).expect("Failed to open DB");
-
-        let secret = [0x09u8; 32];
-        let signing_key = SigningKey::from_bytes(&secret);
-        let originator = signing_key.verifying_key().to_bytes();
-
-        // Entry 1 (seq=1, prev_hash=0)
-        let mut d1 = Vec::new();
-        d1.extend_from_slice(&1u64.to_be_bytes());
-        d1.extend_from_slice(&[0u8; 32]);
-        d1.push(0x02);
-        d1.extend_from_slice(b"p1");
-        let sig1 = signing_key.sign(&d1).to_bytes().to_vec();
-        let e1 = EventLogEntry::new(1, [0u8; 32], originator, 0x02, b"p1".to_vec(), sig1).unwrap();
-        let h1 = e1.compute_hash();
-
-        // Entry 2 (seq=2, prev_hash=h1)
-        let mut d2 = Vec::new();
-        d2.extend_from_slice(&2u64.to_be_bytes());
-        d2.extend_from_slice(&h1);
-        d2.push(0x02);
-        d2.extend_from_slice(b"p2");
-        let sig2 = signing_key.sign(&d2).to_bytes().to_vec();
-        let e2 = EventLogEntry::new(2, h1, originator, 0x02, b"p2".to_vec(), sig2).unwrap();
-
-        // 1. Send e2 FIRST (out of order!) -> should be accepted into staging
-        assert!(db.append_event(e2.clone()).is_ok());
-        {
-            let log = db.event_log.read().unwrap();
-            assert_eq!(log.len(), 0); // Not in canonical log yet!
-        }
-        {
-            let pending = db.pending_unverified.read().unwrap();
-            assert_eq!(pending.get(&originator).unwrap().len(), 1); // Staged!
-        }
-
-        // 2. Send e1 -> should append e1 and AUTO-PROMOTE e2!
-        assert!(db.append_event(e1.clone()).is_ok());
-        {
-            let log = db.event_log.read().unwrap();
-            assert_eq!(log.len(), 2);
-            assert_eq!(log[0].seq, 1);
-            assert_eq!(log[1].seq, 2);
-        }
-        {
-            let pending = db.pending_unverified.read().unwrap();
-            assert!(pending.get(&originator).unwrap().is_empty()); // Drained!
-        }
-
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-}
+mod tests;

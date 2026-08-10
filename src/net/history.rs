@@ -21,6 +21,8 @@ pub struct EventLogEntry {
     pub payload_type: u8,
     pub payload: Vec<u8>,
     pub signature_bytes: Vec<u8>,
+    #[serde(default)]
+    pub is_bullshit: bool,
 }
 
 impl EventLogEntry {
@@ -47,6 +49,7 @@ impl EventLogEntry {
             payload_type,
             payload,
             signature_bytes,
+            is_bullshit: false,
         };
 
         entry.verify_signature()?;
@@ -68,6 +71,7 @@ impl EventLogEntry {
         hasher.update([self.payload_type]);
         hasher.update(&self.payload);
         hasher.update(&self.signature_bytes);
+        hasher.update([self.is_bullshit as u8]);
         let result = hasher.finalize();
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&result);

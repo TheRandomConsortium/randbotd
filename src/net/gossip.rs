@@ -16,8 +16,19 @@ pub const PAYLOAD_TYPE_RANGE_SYNC_REQ: u8 = 9;
 pub const PAYLOAD_TYPE_RANGE_SYNC_RESP: u8 = 10;
 pub const PAYLOAD_TYPE_MERKLE_DRILL_REQ: u8 = 11;
 pub const PAYLOAD_TYPE_MERKLE_DRILL_RESP: u8 = 12;
+#[allow(dead_code)]
+pub const PAYLOAD_TYPE_EQUIVOCATION_PROOF: u8 = 13;
 
 pub const DEFAULT_GOSSIP_TTL: u8 = 8;
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EquivocationProof {
+    pub originator: [u8; 32],
+    pub conflicting_event_a: crate::net::history::EventLogEntry,
+    pub conflicting_event_b: crate::net::history::EventLogEntry,
+    pub reason: String,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GetPeersRequest;
