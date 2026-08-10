@@ -224,10 +224,11 @@ impl Database {
         result
     }
 
-    /// Evaluates peer range vectors against local DB to find local entries the peer is missing
+    /// Evaluates peer range vectors against local DB to find local entries the peer is missing (bounded by max_entries)
     pub fn find_missing_entries_for_peer(
         &self,
         peer_vectors: &[crate::net::history::OriginatorRangeVector],
+        max_entries: usize,
     ) -> Vec<EventLogEntry> {
         use std::collections::HashMap;
         let log = match self.event_log.read() {
@@ -240,6 +241,9 @@ impl Database {
 
         let mut missing = Vec::new();
         for entry in log.iter() {
+            if missing.len() >= max_entries {
+                break;
+            }
             if let Some(peer_vec) = peer_map.get(&entry.originator) {
                 if !peer_vec.has_sequence(entry.seq) {
                     missing.push(entry.clone());

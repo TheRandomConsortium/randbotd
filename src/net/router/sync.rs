@@ -34,7 +34,7 @@ pub async fn handle_range_sync_request(
             }
         }
 
-        let mut missing_for_peer = db.find_missing_entries_for_peer(&req.vector);
+        let mut missing_for_peer = db.find_missing_entries_for_peer(&req.vector, 20);
         let my_vector = db.get_originator_range_vectors(8);
 
         // Enforce 1024-byte UDP MTU payload budget
@@ -93,7 +93,7 @@ pub async fn handle_range_sync_response(
 
         // Symmetrical Step 3: Send back missing entries peer requested in my_vector
         if !resp.my_vector.is_empty() {
-            let mut missing_for_peer = db.find_missing_entries_for_peer(&resp.my_vector);
+            let mut missing_for_peer = db.find_missing_entries_for_peer(&resp.my_vector, 20);
             if !missing_for_peer.is_empty() {
                 while missing_for_peer.len() > 1 {
                     let test_payload = RangeSyncResponse {
