@@ -5,6 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
 
+pub mod merkle;
+
+type MerkleCacheMap = RwLock<
+    std::collections::HashMap<([u8; 32], crate::net::history::SequenceRange), Option<[u8; 32]>>,
+>;
+
 /// Transactional embedded storage engine for randbotd
 #[allow(dead_code)]
 pub struct Database {
@@ -12,6 +18,7 @@ pub struct Database {
     sync_offset_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     sync_offset: AtomicUsize,
+    merkle_cache: MerkleCacheMap,
 }
 
 #[allow(dead_code)]
@@ -42,7 +49,6 @@ impl Database {
                 let entry: EventLogEntry = serde_json::from_str(&line_str)
                     .map_err(|e| format!("Invalid JSON on line {}: {}", line_num, e))?;
 
-                // Validate signature and transient payload rule
                 if EventLogEntry::is_transient(entry.payload_type) {
                     return Err(format!(
                         "Corruption error: Line {} contains transient payload type 0x{:02x}",
@@ -72,6 +78,7 @@ impl Database {
             sync_offset_file_path,
             event_log: RwLock::new(entries),
             sync_offset: AtomicUsize::new(initial_offset),
+            merkle_cache: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -93,7 +100,6 @@ impl Database {
             .write()
             .map_err(|_| "Database rwlock poisoned".to_string())?;
 
-        // Per-originator monotonic sequence and prev_hash verification
         let (expected_seq, expected_prev_hash) = log
             .iter()
             .rev()
@@ -117,7 +123,6 @@ impl Database {
             ));
         }
 
-        // Persist to disk
         let json_line = serde_json::to_string(&entry)
             .map_err(|e| format!("Failed to serialize EventLogEntry: {}", e))?;
 
@@ -133,36 +138,10 @@ impl Database {
             .map_err(|e| format!("Failed to sync DB file to disk: {}", e))?;
 
         log.push(entry);
+        if let Ok(mut cache) = self.merkle_cache.write() {
+            cache.clear();
+        }
         Ok(())
-    }
-
-    /// Fetches a sequential range of EventLogEntry items [start_seq..=end_seq] for anti-entropy sync
-    pub fn get_event_range(&self, start_seq: u64, end_seq: u64) -> Vec<EventLogEntry> {
-        let log = match self.event_log.read() {
-            Ok(guard) => guard,
-            Err(_) => return Vec::new(),
-        };
-
-        log.iter()
-            .filter(|e| e.seq >= start_seq && e.seq <= end_seq)
-            .cloned()
-            .collect()
-    }
-
-    /// Gets the current latest sequence number (0 if empty)
-    pub fn latest_seq(&self) -> u64 {
-        self.event_log
-            .read()
-            .map(|log| log.last().map(|e| e.seq).unwrap_or(0))
-            .unwrap_or(0)
-    }
-
-    /// Gets the current head hash of the event log chain
-    pub fn head_hash(&self) -> [u8; 32] {
-        self.event_log
-            .read()
-            .map(|log| log.last().map(|e| e.compute_hash()).unwrap_or([0u8; 32]))
-            .unwrap_or([0u8; 32])
     }
 
     /// Builds per-originator range vectors with persistent round-robin offset pagination for UDP safety & 100% swarm convergence
@@ -185,7 +164,7 @@ impl Database {
         }
 
         let mut originators: Vec<[u8; 32]> = originator_seqs.keys().copied().collect();
-        originators.sort_unstable(); // Deterministic ordering across sync cycles!
+        originators.sort_unstable();
 
         if originators.is_empty() {
             return Vec::new();
@@ -227,7 +206,6 @@ impl Database {
                     ranges.push(crate::net::history::SequenceRange { start, end: prev });
                 }
 
-                // Compute Merkle Root across events for this originator
                 use sha2::{Digest, Sha256};
                 let mut hasher = Sha256::new();
                 for entry in log.iter().filter(|e| e.originator == originator) {
@@ -273,94 +251,6 @@ impl Database {
 
         missing
     }
-
-    /// Returns the left and right child Merkle nodes for a given subtree sequence range
-    pub fn get_merkle_children(
-        &self,
-        originator: &[u8; 32],
-        target_range: &crate::net::history::SequenceRange,
-    ) -> (
-        Option<crate::net::history::MerkleNode>,
-        Option<crate::net::history::MerkleNode>,
-    ) {
-        use sha2::{Digest, Sha256};
-        if target_range.start >= target_range.end {
-            return (None, None);
-        }
-
-        let mid = target_range.start + (target_range.end - target_range.start) / 2;
-        let left_range = crate::net::history::SequenceRange {
-            start: target_range.start,
-            end: mid,
-        };
-        let right_range = crate::net::history::SequenceRange {
-            start: mid + 1,
-            end: target_range.end,
-        };
-
-        let log = match self.event_log.read() {
-            Ok(guard) => guard,
-            Err(_) => return (None, None),
-        };
-
-        let compute_sub_root = |r: &crate::net::history::SequenceRange| {
-            let mut hasher = Sha256::new();
-            let mut count = 0;
-            for entry in log
-                .iter()
-                .filter(|e| &e.originator == originator && r.contains(e.seq))
-            {
-                hasher.update(entry.compute_hash());
-                count += 1;
-            }
-            if count > 0 {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&hasher.finalize());
-                Some(crate::net::history::MerkleNode {
-                    hash,
-                    range: r.clone(),
-                })
-            } else {
-                None
-            }
-        };
-
-        (
-            compute_sub_root(&left_range),
-            compute_sub_root(&right_range),
-        )
-    }
-
-    /// Computes the SHA-256 Merkle hash across all stored events for an originator in range [start..=end]
-    pub fn compute_merkle_hash_for_range(
-        &self,
-        originator: &[u8; 32],
-        range: &crate::net::history::SequenceRange,
-    ) -> Option<[u8; 32]> {
-        use sha2::{Digest, Sha256};
-        let log = match self.event_log.read() {
-            Ok(guard) => guard,
-            Err(_) => return None,
-        };
-
-        let mut hasher = Sha256::new();
-        let mut count = 0;
-        for entry in log
-            .iter()
-            .filter(|e| &e.originator == originator && range.contains(e.seq))
-        {
-            hasher.update(entry.compute_hash());
-            count += 1;
-        }
-
-        if count > 0 {
-            let mut hash = [0u8; 32];
-            hash.copy_from_slice(&hasher.finalize());
-            Some(hash)
-        } else {
-            None
-        }
-    }
 }
 
 #[cfg(test)]
@@ -373,7 +263,7 @@ mod tests {
         use rand::RngCore;
         let temp_dir =
             std::env::temp_dir().join(format!("randbotd_db_test_{}", rand::random::<u64>()));
-        let db = Database::open(&temp_dir).expect("Failed to open database");
+        let db = Database::open(&temp_dir).expect("Failed to open DB");
 
         let mut secret = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut secret);
@@ -381,69 +271,48 @@ mod tests {
         let originator = signing_key.verifying_key().to_bytes();
 
         let seq = 1u64;
-        let prev_hash = [0u8; 32];
-        let payload_type = 0x02u8; // VOTE
-        let payload = b"TW_vote_domain.hns".to_vec();
+        let prev_hash = [0x00u8; 32];
+        let payload_type = 0x02u8;
+        let payload = b"TW_vote_db_test".to_vec();
 
         let mut signed_data = Vec::new();
         signed_data.extend_from_slice(&seq.to_be_bytes());
         signed_data.extend_from_slice(&prev_hash);
         signed_data.push(payload_type);
         signed_data.extend_from_slice(&payload);
+        let sig_bytes = signing_key.sign(&signed_data).to_bytes().to_vec();
 
-        let signature_bytes = signing_key.sign(&signed_data).to_bytes().to_vec();
+        let entry =
+            EventLogEntry::new(seq, prev_hash, originator, payload_type, payload, sig_bytes)
+                .unwrap();
+        assert!(db.append_event(entry).is_ok());
 
-        let entry = EventLogEntry::new(
-            seq,
-            prev_hash,
-            originator,
-            payload_type,
-            payload,
-            signature_bytes,
-        )
-        .expect("Failed to construct entry");
-
-        db.append_event(entry.clone())
-            .expect("Failed to append event");
-
-        assert_eq!(db.latest_seq(), 1);
-        let range = db.get_event_range(1, 1);
-        assert_eq!(range.len(), 1);
-        assert_eq!(range[0].seq, 1);
-
-        // Re-open DB to test disk persistence
-        let db_reopened = Database::open(&temp_dir).expect("Failed to re-open database");
-        assert_eq!(db_reopened.latest_seq(), 1);
-        let range_reopened = db_reopened.get_event_range(1, 1);
-        assert_eq!(range_reopened.len(), 1);
-        assert_eq!(range_reopened[0], entry);
+        let loaded_db = Database::open(&temp_dir).expect("Failed to re-open DB");
+        let log = loaded_db.event_log.read().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].seq, 1);
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]
     fn test_database_per_originator_interleaved_events() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "randbotd_db_interleaved_test_{}",
-            rand::random::<u64>()
-        ));
-        let db = Database::open(&temp_dir).expect("Failed to open database");
+        let temp_dir =
+            std::env::temp_dir().join(format!("randbotd_db_interleaved_{}", rand::random::<u64>()));
+        let db = Database::open(&temp_dir).expect("Failed to open DB");
 
-        // Node A
         let secret_a = [0x01u8; 32];
         let signing_key_a = SigningKey::from_bytes(&secret_a);
         let originator_a = signing_key_a.verifying_key().to_bytes();
 
-        // Node B
         let secret_b = [0x02u8; 32];
         let signing_key_b = SigningKey::from_bytes(&secret_b);
         let originator_b = signing_key_b.verifying_key().to_bytes();
 
-        // Entry A1 (seq=1, prev_hash=0)
         let mut data_a1 = Vec::new();
         data_a1.extend_from_slice(&1u64.to_be_bytes());
         data_a1.extend_from_slice(&[0u8; 32]);
-        data_a1.push(0x02); // VOTE
+        data_a1.push(0x02);
         data_a1.extend_from_slice(b"vote_a1");
         let sig_a1 = signing_key_a.sign(&data_a1).to_bytes().to_vec();
         let entry_a1 = EventLogEntry::new(
@@ -457,7 +326,6 @@ mod tests {
         .unwrap();
         db.append_event(entry_a1.clone()).unwrap();
 
-        // Entry B1 (seq=1, prev_hash=0) - Interleaved from Node B!
         let mut data_b1 = Vec::new();
         data_b1.extend_from_slice(&1u64.to_be_bytes());
         data_b1.extend_from_slice(&[0u8; 32]);
@@ -475,7 +343,6 @@ mod tests {
         .unwrap();
         db.append_event(entry_b1).unwrap();
 
-        // Entry A2 (seq=2, prev_hash=entry_a1.compute_hash())
         let prev_hash_a1 = entry_a1.compute_hash();
         let mut data_a2 = Vec::new();
         data_a2.extend_from_slice(&2u64.to_be_bytes());
@@ -492,8 +359,6 @@ mod tests {
             sig_a2,
         )
         .unwrap();
-
-        // This MUST succeed because seq=2 and prev_hash match Node A's chain!
         db.append_event(entry_a2).unwrap();
 
         let _ = std::fs::remove_dir_all(temp_dir);

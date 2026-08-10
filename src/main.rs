@@ -284,6 +284,21 @@ async fn main() {
 
             // Prune seen gossip message IDs older than 1 hour (3600 seconds)
             ping_router.prune_seen_cache(3600);
+
+            // Capacity-Triggered Peer Discovery (NET-08): Only pester peers if active count < target (8)
+            let active_count = ping_router.active_peers().len();
+            if active_count < 8 {
+                let payload =
+                    serde_json::to_vec(&crate::net::gossip::GetPeersRequest).unwrap_or_default();
+                let msg = GossipMessage::new(
+                    ping_identity.signing_key(),
+                    ping_seq,
+                    1,
+                    crate::net::gossip::PAYLOAD_TYPE_GET_PEERS_REQ,
+                    payload,
+                );
+                ping_router.broadcast(&msg, &ping_socket).await;
+            }
         }
     });
 

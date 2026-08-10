@@ -102,7 +102,7 @@ impl EventLogEntry {
 }
 
 /// Monotonic sequence range [start..=end] for a single originator
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SequenceRange {
     pub start: u64,
     pub end: u64,
@@ -149,6 +149,7 @@ pub struct MerkleNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct MerkleDrillRequest {
+    pub nonce: u64,
     pub originator: [u8; 32],
     pub target_range: SequenceRange,
 }
@@ -157,6 +158,7 @@ pub struct MerkleDrillRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct MerkleDrillResponse {
+    pub nonce: u64,
     pub originator: [u8; 32],
     pub left_child: Option<MerkleNode>,
     pub right_child: Option<MerkleNode>,

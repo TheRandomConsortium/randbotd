@@ -16,12 +16,15 @@ use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
+pub mod anti_spam;
 pub mod sync;
+use anti_spam::PeerAntiSpamState;
 use sync::*;
 
 pub struct GossipRouter {
     seen_cache: Arc<RwLock<HashMap<[u8; 32], u64>>>,
     active_peers: Arc<RwLock<HashMap<SocketAddr, u64>>>,
+    pub anti_spam: PeerAntiSpamState,
     phonebook: Arc<RwLock<Phonebook>>,
     database: Option<Arc<Database>>,
 }
@@ -32,6 +35,7 @@ impl GossipRouter {
         Self {
             seen_cache: Arc::new(RwLock::new(HashMap::new())),
             active_peers: Arc::new(RwLock::new(HashMap::new())),
+            anti_spam: PeerAntiSpamState::new(),
             phonebook,
             database: None,
         }
@@ -41,9 +45,46 @@ impl GossipRouter {
         Self {
             seen_cache: Arc::new(RwLock::new(HashMap::new())),
             active_peers: Arc::new(RwLock::new(HashMap::new())),
+            anti_spam: PeerAntiSpamState::new(),
             phonebook,
             database: Some(database),
         }
+    }
+
+    pub fn ban_peer(&self, addr: SocketAddr, duration_secs: u64) {
+        self.anti_spam.ban_peer(addr, duration_secs);
+    }
+
+    pub fn is_banned(&self, addr: SocketAddr) -> bool {
+        self.anti_spam.is_banned(addr)
+    }
+
+    pub fn register_drill_nonce(&self, nonce: u64) {
+        self.anti_spam.register_drill_nonce(nonce);
+    }
+
+    pub fn validate_and_take_nonce(&self, nonce: u64) -> bool {
+        self.anti_spam.validate_and_take_nonce(nonce)
+    }
+
+    pub fn is_originator_saturated(
+        &self,
+        peer: SocketAddr,
+        originator: &[u8; 32],
+        req_end: u64,
+    ) -> bool {
+        self.anti_spam
+            .is_originator_saturated(peer, originator, req_end)
+    }
+
+    pub fn mark_originator_saturated(
+        &self,
+        peer: SocketAddr,
+        originator: [u8; 32],
+        highest_seq: u64,
+    ) {
+        self.anti_spam
+            .mark_originator_saturated(peer, originator, highest_seq);
     }
 
     pub fn add_peer(&self, addr: SocketAddr) {
@@ -125,6 +166,10 @@ impl GossipRouter {
         is_seed: bool,
         is_headless: bool,
     ) -> Result<Option<GossipMessage>, &'static str> {
+        if self.is_banned(src) {
+            return Ok(None);
+        }
+
         let my_pubkey = identity.map(|id| id.verifying_key().to_bytes());
 
         // 1. Check if packet is HandshakeInit
@@ -294,19 +339,19 @@ impl GossipRouter {
             }
         } else if msg.payload_type == PAYLOAD_TYPE_RANGE_SYNC_REQ {
             if let Some(db) = &self.database {
-                handle_range_sync_request(&msg, src, socket, identity, db).await;
+                handle_range_sync_request(self, &msg, src, socket, identity, db).await;
             }
         } else if msg.payload_type == PAYLOAD_TYPE_RANGE_SYNC_RESP {
             if let Some(db) = &self.database {
-                handle_range_sync_response(&msg, src, socket, identity, db).await;
+                handle_range_sync_response(self, &msg, src, socket, identity, db).await;
             }
         } else if msg.payload_type == PAYLOAD_TYPE_MERKLE_DRILL_REQ {
             if let Some(db) = &self.database {
-                handle_merkle_drill_request(&msg, src, socket, identity, db).await;
+                handle_merkle_drill_request(self, &msg, src, socket, identity, db).await;
             }
         } else if msg.payload_type == PAYLOAD_TYPE_MERKLE_DRILL_RESP {
             if let Some(db) = &self.database {
-                handle_merkle_drill_response(&msg, src, socket, identity, db).await;
+                handle_merkle_drill_response(self, &msg, src, socket, identity, db).await;
             }
         }
 
@@ -337,137 +382,4 @@ impl GossipRouter {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::crypto::identity::NodeIdentity;
-    use crate::net::gossip::{DEFAULT_GOSSIP_TTL, PAYLOAD_TYPE_VOTE};
-
-    #[test]
-    fn test_router_seen_cache_deduplication() {
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let router = GossipRouter::new(phonebook);
-
-        let identity = NodeIdentity::from_seed_and_role(
-            &[0x44u8; 32],
-            crate::crypto::identity::NodeRole::Voter,
-        );
-        let msg = GossipMessage::new(
-            identity.signing_key(),
-            1,
-            DEFAULT_GOSSIP_TTL,
-            PAYLOAD_TYPE_VOTE,
-            b"test_payload".to_vec(),
-        );
-
-        assert!(!router.is_seen(&msg.msg_id));
-        router.mark_seen(msg.msg_id);
-        assert!(router.is_seen(&msg.msg_id));
-    }
-
-    #[tokio::test]
-    async fn test_anti_entropy_range_sync_exchange() {
-        use crate::net::gossip::{RangeSyncRequest, PAYLOAD_TYPE_RANGE_SYNC_REQ};
-        use crate::storage::db::Database;
-        use ed25519_dalek::{Signer, SigningKey};
-
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_sync_test_{}", rand::random::<u64>()));
-        let db = Arc::new(Database::open(&temp_dir).expect("Failed to open DB"));
-
-        let secret = [0x05u8; 32];
-        let signing_key = SigningKey::from_bytes(&secret);
-        let originator = signing_key.verifying_key().to_bytes();
-        let mut signed_data = Vec::new();
-        signed_data.extend_from_slice(&1u64.to_be_bytes());
-        signed_data.extend_from_slice(&[0u8; 32]);
-        signed_data.push(0x02);
-        signed_data.extend_from_slice(b"vote_sync_payload");
-        let sig = signing_key.sign(&signed_data).to_bytes().to_vec();
-        let entry = crate::net::history::EventLogEntry::new(
-            1,
-            [0u8; 32],
-            originator,
-            0x02,
-            b"vote_sync_payload".to_vec(),
-            sig,
-        )
-        .unwrap();
-        db.append_event(entry).unwrap();
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let router = GossipRouter::with_database(phonebook, db);
-        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let node_id =
-            NodeIdentity::from_seed_and_role(&secret, crate::crypto::identity::NodeRole::Voter);
-        let sync_req = RangeSyncRequest { vector: Vec::new() };
-        let req_bytes = serde_json::to_vec(&sync_req).unwrap();
-        let msg = GossipMessage::new(
-            node_id.signing_key(),
-            1,
-            1,
-            PAYLOAD_TYPE_RANGE_SYNC_REQ,
-            req_bytes,
-        );
-        let dummy_src = "127.0.0.1:43210".parse().unwrap();
-        let result = router
-            .process_incoming_packet(
-                &msg.to_bytes(),
-                dummy_src,
-                &socket,
-                Some(&node_id),
-                false,
-                false,
-            )
-            .await;
-        assert!(result.is_ok());
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_anti_entropy_merkle_drill_exchange() {
-        use crate::net::gossip::PAYLOAD_TYPE_MERKLE_DRILL_REQ;
-        use crate::net::history::{MerkleDrillRequest, SequenceRange};
-        use crate::storage::db::Database;
-        use ed25519_dalek::SigningKey;
-
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_merkle_test_{}", rand::random::<u64>()));
-        let db = Arc::new(Database::open(&temp_dir).expect("Failed to open DB"));
-        let secret = [0x06u8; 32];
-        let signing_key = SigningKey::from_bytes(&secret);
-        let originator = signing_key.verifying_key().to_bytes();
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let router = GossipRouter::with_database(phonebook, db);
-        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let node_id =
-            NodeIdentity::from_seed_and_role(&secret, crate::crypto::identity::NodeRole::Voter);
-
-        let drill_req = MerkleDrillRequest {
-            originator,
-            target_range: SequenceRange { start: 1, end: 10 },
-        };
-        let req_bytes = serde_json::to_vec(&drill_req).unwrap();
-        let msg = GossipMessage::new(
-            node_id.signing_key(),
-            1,
-            1,
-            PAYLOAD_TYPE_MERKLE_DRILL_REQ,
-            req_bytes,
-        );
-
-        let dummy_src = "127.0.0.1:43210".parse().unwrap();
-        let result = router
-            .process_incoming_packet(
-                &msg.to_bytes(),
-                dummy_src,
-                &socket,
-                Some(&node_id),
-                false,
-                false,
-            )
-            .await;
-        assert!(result.is_ok());
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-}
+mod tests;
