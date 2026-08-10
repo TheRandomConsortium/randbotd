@@ -11,12 +11,15 @@ type MerkleCacheMap = RwLock<
     std::collections::HashMap<([u8; 32], crate::net::history::SequenceRange), Option<[u8; 32]>>,
 >;
 
+type PendingStagingMap = RwLock<std::collections::HashMap<[u8; 32], Vec<EventLogEntry>>>;
+
 /// Transactional embedded storage engine for randbotd
 #[allow(dead_code)]
 pub struct Database {
     db_file_path: PathBuf,
     sync_offset_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
+    pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
     merkle_cache: MerkleCacheMap,
 }
@@ -77,12 +80,36 @@ impl Database {
             db_file_path,
             sync_offset_file_path,
             event_log: RwLock::new(entries),
+            pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
             merkle_cache: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
-    /// Appends a verified consensus EventLogEntry to the database
+    fn persist_and_append_entry(
+        &self,
+        log: &mut Vec<EventLogEntry>,
+        entry: EventLogEntry,
+    ) -> Result<(), String> {
+        let json_line = serde_json::to_string(&entry)
+            .map_err(|e| format!("Failed to serialize EventLogEntry: {}", e))?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.db_file_path)
+            .map_err(|e| format!("Failed to open DB file for writing: {}", e))?;
+
+        writeln!(file, "{}", json_line)
+            .map_err(|e| format!("Failed to write event line to DB: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync DB file to disk: {}", e))?;
+
+        log.push(entry);
+        Ok(())
+    }
+
+    /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging & auto-promotion)
     pub fn append_event(&self, entry: EventLogEntry) -> Result<(), String> {
         if EventLogEntry::is_transient(entry.payload_type) {
             return Err(format!(
@@ -107,13 +134,25 @@ impl Database {
             .map(|e| (e.seq + 1, e.compute_hash()))
             .unwrap_or((1, [0u8; 32]));
 
-        if entry.seq != expected_seq {
-            return Err(format!(
-                "Per-originator sequence mismatch for node {:02x?}: expected {}, got {}",
-                &entry.originator[..4],
-                expected_seq,
-                entry.seq
-            ));
+        if entry.seq > expected_seq {
+            if let Ok(mut pending) = self.pending_unverified.write() {
+                let staged_list = pending.entry(entry.originator).or_default();
+                if !staged_list.iter().any(|e| e.seq == entry.seq) {
+                    staged_list.push(entry.clone());
+                    staged_list.sort_by_key(|e| e.seq);
+                    println!(
+                        "  📦 [Anti-Entropy DB] Staged out-of-order event seq {} for node {:02x?} (Expected seq {})",
+                        entry.seq,
+                        &entry.originator[..4],
+                        expected_seq
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        if entry.seq < expected_seq {
+            return Ok(());
         }
 
         if entry.prev_hash != expected_prev_hash {
@@ -123,21 +162,41 @@ impl Database {
             ));
         }
 
-        let json_line = serde_json::to_string(&entry)
-            .map_err(|e| format!("Failed to serialize EventLogEntry: {}", e))?;
+        self.persist_and_append_entry(&mut log, entry.clone())?;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.db_file_path)
-            .map_err(|e| format!("Failed to open DB file for writing: {}", e))?;
+        // DRAIN & AUTO-PROMOTE STAGED ITEMS for this originator!
+        if let Ok(mut pending) = self.pending_unverified.write() {
+            if let Some(staged_list) = pending.get_mut(&entry.originator) {
+                let mut current_expected_seq = entry.seq + 1;
+                let mut current_prev_hash = entry.compute_hash();
 
-        writeln!(file, "{}", json_line)
-            .map_err(|e| format!("Failed to write event line to DB: {}", e))?;
-        file.sync_all()
-            .map_err(|e| format!("Failed to sync DB file to disk: {}", e))?;
+                while !staged_list.is_empty() && staged_list[0].seq == current_expected_seq {
+                    let next_item = staged_list.remove(0);
+                    if next_item.prev_hash == current_prev_hash {
+                        if let Ok(()) = self.persist_and_append_entry(&mut log, next_item.clone()) {
+                            println!(
+                                "  ⚡ [Anti-Entropy DB] Auto-promoted staged event seq {} for node {:02x?}",
+                                next_item.seq,
+                                &next_item.originator[..4]
+                            );
+                            current_expected_seq = next_item.seq + 1;
+                            current_prev_hash = next_item.compute_hash();
+                        } else {
+                            break;
+                        }
+                    } else {
+                        eprintln!(
+                            "  ⚠️ [Anti-Entropy DB] Staged event seq {} for node {:02x?} failed prev_hash link verification! Discarding broken staged chain.",
+                            next_item.seq,
+                            &next_item.originator[..4]
+                        );
+                        staged_list.clear();
+                        break;
+                    }
+                }
+            }
+        }
 
-        log.push(entry);
         if let Ok(mut cache) = self.merkle_cache.write() {
             cache.clear();
         }
@@ -364,6 +423,62 @@ mod tests {
         )
         .unwrap();
         db.append_event(entry_a2).unwrap();
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_database_out_of_order_staging_and_autopromote() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("randbotd_db_ooo_{}", rand::random::<u64>()));
+        let db = Database::open(&temp_dir).expect("Failed to open DB");
+
+        let secret = [0x09u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let originator = signing_key.verifying_key().to_bytes();
+
+        // Entry 1 (seq=1, prev_hash=0)
+        let mut d1 = Vec::new();
+        d1.extend_from_slice(&1u64.to_be_bytes());
+        d1.extend_from_slice(&[0u8; 32]);
+        d1.push(0x02);
+        d1.extend_from_slice(b"p1");
+        let sig1 = signing_key.sign(&d1).to_bytes().to_vec();
+        let e1 = EventLogEntry::new(1, [0u8; 32], originator, 0x02, b"p1".to_vec(), sig1).unwrap();
+        let h1 = e1.compute_hash();
+
+        // Entry 2 (seq=2, prev_hash=h1)
+        let mut d2 = Vec::new();
+        d2.extend_from_slice(&2u64.to_be_bytes());
+        d2.extend_from_slice(&h1);
+        d2.push(0x02);
+        d2.extend_from_slice(b"p2");
+        let sig2 = signing_key.sign(&d2).to_bytes().to_vec();
+        let e2 = EventLogEntry::new(2, h1, originator, 0x02, b"p2".to_vec(), sig2).unwrap();
+
+        // 1. Send e2 FIRST (out of order!) -> should be accepted into staging
+        assert!(db.append_event(e2.clone()).is_ok());
+        {
+            let log = db.event_log.read().unwrap();
+            assert_eq!(log.len(), 0); // Not in canonical log yet!
+        }
+        {
+            let pending = db.pending_unverified.read().unwrap();
+            assert_eq!(pending.get(&originator).unwrap().len(), 1); // Staged!
+        }
+
+        // 2. Send e1 -> should append e1 and AUTO-PROMOTE e2!
+        assert!(db.append_event(e1.clone()).is_ok());
+        {
+            let log = db.event_log.read().unwrap();
+            assert_eq!(log.len(), 2);
+            assert_eq!(log[0].seq, 1);
+            assert_eq!(log[1].seq, 2);
+        }
+        {
+            let pending = db.pending_unverified.read().unwrap();
+            assert!(pending.get(&originator).unwrap().is_empty()); // Drained!
+        }
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
