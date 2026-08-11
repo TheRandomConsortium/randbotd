@@ -254,9 +254,14 @@ Worker Node                                 CA Node                             
      - **Risk-Free Revocation**: If a CA revokes a worker node (`CustodianRevocation`) or a contract expires (`DelegationTTL`), **0 CA capital is lost**, because no upfront payment was ever made!
      - **Alignment of Incentives**: Workers are incentivized to maintain high uptime and low latency to participate in co-signing quorums and earn work-share fees.
 
-> [!WARNING]
-> **Purge Refund Liability & Swarm Trust Requirement (`PAY-06` Integration)**:
-> While Revenue-Share eliminates upfront fee rug-pulls during issuance, **domain purges (`CA-07` / `PAY-06`) introduce shared financial liabilities**. Under `PAY-06`, purging a clean domain prematurely before TTL expiration requires refunding the remaining prorated fee to the domain owner. In a distributed custodian swarm, this refund cost **must be split proportionally among all custodian nodes that shared the original issuance revenue**. If a custodian node refuses to contribute its split of the refund, or blocks the threshold purge signature, the purge transaction fails P2P consensus validation. Therefore, operating a distributed custodian swarm **still requires operational trust and alignment among custodian nodes regarding domain purge policies and shared refund liabilities**.
+> [!TIP]
+> **Trustless Resolution: The Domain Purge Bounty Protocol (`DomainPurgeBounty`)**:
+> To eliminate the trust requirement and liquidity bottleneck of shared purge refund liabilities, `randbotd` establishes the **Domain Purge Bounty Protocol**:
+> 1. **Bounty Emission**: If a CA (or custodian swarm) needs to purge a domain (`CA-07` / `PAY-06`) but faces a non-paying custodian node or lacks immediate liquidity, the CA emits a signed P2P `DomainPurgeBounty` specifying the required prorated refund amount and an **agreed yield interest rate ($\Delta r$)**.
+> 2. **Direct Domain Owner Fulfillment**: Any market participant (bounty hunter) funds the bounty by sending the prorated refund **directly to the domain owner's address** (proven on-chain via Monero `tx_key` under `BountyFulfillmentProof`). The CA receives 0 XMR directly.
+> 3. **Elimination of CA Exit-Scams / Moral Hazard**: Because funds bypass the CA entirely and go straight to the domain owner, a rogue CA has **zero financial incentive to fake bounties or exit-scam**. The CA gains no capital from bounty fulfillment and must continue operating and issuing certificates to resume earning net revenue after settling the repayment queue.
+> 4. **Priority Fee Repayment Queue**: Once funded, the domain purge is executed immediately. Next ACME certificate fees earned by that CA under `PAY-03` are automatically routed to **repay the Bounty Hunter first** (Principal + Interest) before net revenue flows to the CA Treasury or custodian workers.
+> 5. **Game-Theoretic Risk Assessment**: Bounty hunters make **informed financial decisions** prior to funding by evaluating the CA's historical issuance volume, WoT consensus reputation, and active domain portfolio.
 
 ---
 
