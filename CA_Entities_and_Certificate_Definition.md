@@ -136,6 +136,19 @@ While standard web TLS relies on X.509 v3 ASN.1 DER structures, specialized PKI 
 
 ---
 
+### 3.0 Unix Domain Socket IPC Administration & Local Node Control
+
+In a systemd managed installation (`StateDirectory=randbotd`), `randbotd` enforces strict state directory isolation (`/var/lib/randbotd` mode `0750`). Direct daemon administration commands over the Unix domain socket (`/var/lib/randbotd/randbotd.sock`) require administrative privileges using `sudo socat`:
+
+```bash
+# Publish Root CA via daemon Unix Domain Socket (sudo socat)
+echo '{"PublishCa":{"common_name":"The Random Consortium Root CA","organization":"The Random Consortium","organizational_unit":"PKI Operations","locality":"Valencia","state_or_province":"Valencia","country":"ES","email":"ca@therandomconsortium.org","is_intermediate":false,"path_len_constraint":null}}' | sudo socat - UNIX-CONNECT:/var/lib/randbotd/randbotd.sock
+```
+
+> **Security Note**: Direct IPC socket access enforces strict system administrative authorization (`sudo` or `randbotd` user group membership), protecting private keys (`node_key.enc`) and the transactional event log database.
+
+---
+
 ## 3. CA Entity Data Model & Operational Architecture
 
 A Certificate Authority in `randbotd` is NOT merely a static cryptographic keypair. It is a **sovereign P2P network entity** with an identity, custodian governance model, multi-tier offer catalog, operational risk boundaries, consensus state, and anti-entropy event log integration.

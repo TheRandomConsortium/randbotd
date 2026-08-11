@@ -40,6 +40,24 @@ Domain owners request TLS certificates via an ACME-compatible endpoint:
 
 ---
 
+## 🛠️ Operational Administration & Daemon Control
+
+In a systemd managed installation, `randbotd` enforces strict state directory isolation (`/var/lib/randbotd` mode `0750`). Daemon control commands sent via the Unix domain socket (`/var/lib/randbotd/randbotd.sock`) must be executed with `sudo` using `socat` (or by users in the `randbotd` group):
+
+### 1. Publishing a Certificate Authority (`PublishCa`)
+```bash
+echo '{"PublishCa":{"common_name":"The Random Consortium Root CA","organization":"The Random Consortium","organizational_unit":"PKI Operations","locality":"Valencia","state_or_province":"Valencia","country":"ES","email":"ca@therandomconsortium.org","is_intermediate":false,"path_len_constraint":null}}' | sudo socat - UNIX-CONNECT:/var/lib/randbotd/randbotd.sock
+```
+
+### 2. Importing a Peer (`ImportPeer`)
+```bash
+echo '{"ImportPeer":{"peer_addr":"85.52.85.114:43210"}}' | sudo socat - UNIX-CONNECT:/var/lib/randbotd/randbotd.sock
+```
+
+> **Security Note**: Direct Unix socket commands strictly enforce system administrative authorization (`sudo` or `randbotd` group membership).
+
+---
+
 ## 🔌 Ecosystem Integration
 
 ### Caddy CertMagic Plugin
