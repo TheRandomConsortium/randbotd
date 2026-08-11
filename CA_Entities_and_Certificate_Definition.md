@@ -190,8 +190,56 @@ To distribute operational load, prevent server downtime, and protect high-reputa
 2. **Parallel ACME Load-Sharing Protocol**:
    - Domain certificate issuance requests (`GetCert`) arriving at the CA's public endpoint can be load-balanced across all active custodian swarm nodes (`active_custodian_nodes`).
    - Domain proof validation (`CA-03`) is executed in parallel by custodian nodes. Once verified, nodes generate threshold partial signatures (`PartialSignatureShare`), which are aggregated into the final valid certificate.
-3. **Sub-Custodian Delegation Proofs (`CustodianDelegationProof`)**:
-   - The primary custodian identity can issue short-lived, cryptographically scoped delegation tokens allowing operational worker nodes to sign certificates within strict constraints (e.g. max 30-day TTL, specific TLDs, or specific price tiers) without possessing the root CA key.
+
+#### 4-Step Escrow-Less Custodian Delegation State Machine & Revenue-Share Mechanics (`CA-11`)
+
+To eliminate the moral hazard and rug-pull vector of upfront custodian fees (where a lazy or fraudulent worker node takes an upfront payment and then goes offline or refuses to issue certs), `randbotd` enforces a **Pay-As-You-Work Revenue-Share Settlement Protocol**.
+
+Onboarding a worker node into a CA custodian swarm carries **zero upfront fees**. Instead, worker nodes are compensated dynamically through a **work-share fee percentage ($P_{\text{worker}}$)** per certificate issued. When a domain pays an ACME fee under `PAY-03`, the Monero payment `tx_key` proves on-chain fee distribution directly to the $m$ active co-signing worker nodes that generated threshold partial signatures (`PartialSignatureShare`) for that specific certificate emission.
+
+```
+Worker Node                                 CA Node                               P2P Swarm
+    |                                          |                                      |
+    |---- 1. CustodianContract --------------->|                                      |
+    |     (CA_ID, Max TTL, WorkShare % P_w)    |                                      |
+    |                                          |                                      |
+    |<--- 2. CustodianDelegationRequest -------|                                      |
+    |     (Accords terms, targets Worker)      |                                      |
+    |                                          |                                      |
+    |---- 3. CACapabilitiesProof -------------->|                                      |
+    |     (Dummy Cert Build, Liveness Proof)   |                                      |
+    |                                          |                                      |
+    |<--- 4. SwarmActivationConfirmation ------|                                      |
+    |     (CA signs final swarm entry)         |                                      |
+    |                                          |                                      |
+    |=================== 5. Swarm Admission & P2P Validation ==========================>|
+    |                    (Verified locally network-wide; 0 Upfront Fee)                |
+    |                                                                                 |
+    |---- (Per-Issuance Pay-As-You-Work Revenue-Share Settlement under PAY-03) ------->|
+    |     (Monero tx_key routes P_w % to active m co-signers upon cert emission)       |
+```
+
+1. **Step 1: Worker Node Emits `CustodianContract` (Work-Share Terms)**:
+   - Candidate worker node publishes a signed `CustodianContract` payload into the P2P event log (`NET-05`).
+   - Specifies operational parameters: target `CA_ID`, supported algorithms, max allowed TTL, capability backends, max issuance capacity, and requested **Work-Share Fee Percentage $P_{\text{worker}}$** (e.g. 15% of certificate fee per co-signed issuance).
+2. **Step 2: CA Emits `CustodianDelegationRequest` (CA Accord)**:
+   - Primary CA node emits a signed `CustodianDelegationRequest` targeting the worker node (`WorkerNodePubKey`), according to the terms and work-share percentage $P_{\text{worker}}$.
+3. **Step 3: Worker Node Emits `CACapabilitiesProof` (Dummy Cert Build & Liveness Commitment)**:
+   - Worker node emits a signed `CACapabilitiesProof` containing a **dummy/test certificate build** signed using the worker's key under accord parameters.
+   - **Game Theory & Capability Verification**: Proves active X.509 certificate building engines, crypto libraries, and active capability backends online *before* swarm admission.
+4. **Step 4: CA Emits `SwarmActivationConfirmation` (Final Activation)**:
+   - CA emits a signed `SwarmActivationConfirmation` admitting the worker node into the active signing quorum.
+   - **Network-Wide Validation**: P2P nodes validate all 4 steps (`CustodianContract` $\rightarrow$ `CustodianDelegationRequest` $\rightarrow$ `CACapabilitiesProof` $\rightarrow$ `SwarmActivationConfirmation`).
+5. **Trustless Pay-As-You-Work Settlement (`PAY-03` Integration)**:
+   - When a domain owner pays for a certificate (e.g. 0.01 XMR), the Monero transaction splits payment: $(100\% - \sum P_{\text{worker}})$ to the CA Treasury, and $P_{\text{worker}}$ directly to each of the $m$ active co-signing custodian nodes.
+   - **Game Theory Security Guarantees**:
+     - **Lazy Worker Immunity**: Offline or non-performing workers earn 0 XMR.
+     - **Risk-Free Revocation**: If a CA revokes a worker node (`CustodianRevocation`) or a contract expires (`DelegationTTL`), **0 CA capital is lost**, because no upfront payment was ever made!
+     - **Alignment of Incentives**: Workers are incentivized to maintain high uptime and low latency to participate in co-signing quorums and earn work-share fees.
+
+> [!WARNING]
+> **Purge Refund Liability & Swarm Trust Requirement (`PAY-06` Integration)**:
+> While Revenue-Share eliminates upfront fee rug-pulls during issuance, **domain purges (`CA-07` / `PAY-06`) introduce shared financial liabilities**. Under `PAY-06`, purging a clean domain prematurely before TTL expiration requires refunding the remaining prorated fee to the domain owner. In a distributed custodian swarm, this refund cost **must be split proportionally among all custodian nodes that shared the original issuance revenue**. If a custodian node refuses to contribute its split of the refund, or blocks the threshold purge signature, the purge transaction fails P2P consensus validation. Therefore, operating a distributed custodian swarm **still requires operational trust and alignment among custodian nodes regarding domain purge policies and shared refund liabilities**.
 
 ---
 
