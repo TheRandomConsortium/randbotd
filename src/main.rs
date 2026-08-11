@@ -193,7 +193,8 @@ async fn main() {
 
     // 4.2. Spawn Local Daemon IPC Control Server (NET-08)
     let ipc_socket_path = base_state_dir.join("randbotd.sock");
-    let ipc_server = net::ipc::IpcServer::new(ipc_socket_path, shared_phonebook.clone());
+    let ipc_server =
+        net::ipc::IpcServer::with_db(ipc_socket_path, shared_phonebook.clone(), db.clone());
     let _ipc_handle = ipc_server.spawn();
 
     // Broadcast AddressAnnouncement Payload

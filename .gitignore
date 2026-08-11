@@ -3,3 +3,4 @@
 *.deb
 *.enc
 randbotd.list
+ca_declarations.json

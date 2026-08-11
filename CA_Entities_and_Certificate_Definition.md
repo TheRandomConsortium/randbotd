@@ -191,6 +191,10 @@ To distribute operational load, prevent server downtime, and protect high-reputa
    - Domain certificate issuance requests (`GetCert`) arriving at the CA's public endpoint can be load-balanced across all active custodian swarm nodes (`active_custodian_nodes`).
    - Domain proof validation (`CA-03`) is executed in parallel by custodian nodes. Once verified, nodes generate threshold partial signatures (`PartialSignatureShare`), which are aggregated into the final valid certificate.
 
+#### 📅 Two-Stage Execution Timeline for `CA-11`:
+- **Stage 1 (CA Module Phase 3 / Global Phase 3)**: **Non-Monetary Infrastructure Swarms (0 Fees)**. `CA-11` launches early as a pure P2P load-distribution and high-availability mechanism. Worker nodes join custodian swarms to share validation work and signing duties without monetary compensation (0-cost custodian clusters).
+- **Stage 2 (Global Phase 9 - Monero Market Integration)**: **Monetized Swarms & Pay-As-You-Work Revenue-Share**. When the Monero Decentralized Market (`PAY-01` to `PAY-06`) arrives in Global Phase 9, `CA-11` activates work-share fee splits ($P_{\text{worker}}$ under `PAY-03`) and shared purge refund liabilities (`PAY-06`).
+
 #### 4-Step Escrow-Less Custodian Delegation State Machine & Revenue-Share Mechanics (`CA-11`)
 
 To eliminate the moral hazard and rug-pull vector of upfront custodian fees (where a lazy or fraudulent worker node takes an upfront payment and then goes offline or refuses to issue certs), `randbotd` enforces a **Pay-As-You-Work Revenue-Share Settlement Protocol**.

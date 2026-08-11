@@ -336,3 +336,53 @@ fn test_database_equivocation_truth_resolution() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[test]
+fn test_db_ca_subtable_persistence() {
+    use crate::crypto::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("randbotd_ca_db_test_{}", rand::random::<u64>()));
+    let db = Database::open(&temp_dir).expect("Failed to open DB");
+
+    let subject = CaSubjectMetadata {
+        common_name: "Consortium Root CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: Some("PKI".to_string()),
+        locality: Some("Valencia".to_string()),
+        state_or_province: Some("Valencia".to_string()),
+        country: Some("ES".to_string()),
+        email: Some("root@consortium.rand".to_string()),
+    };
+
+    let ca_id = compute_ca_id(b"root_key_bytes");
+    let decl = CaDeclaration::new(
+        ca_id,
+        subject.clone(),
+        subject.clone(),
+        false,
+        None,
+        1700000000,
+    )
+    .unwrap();
+
+    let inserted_id = db.insert_ca(decl.clone()).unwrap();
+    assert_eq!(inserted_id, ca_id);
+
+    let retrieved = db.get_ca(&ca_id).expect("Failed to get CA from DB");
+    assert_eq!(retrieved, decl);
+
+    let all_cas = db.list_cas();
+    assert_eq!(all_cas.len(), 1);
+    assert_eq!(all_cas[0].subject.common_name, "Consortium Root CA");
+
+    // Close and reopen DB to verify JSON persistence
+    drop(db);
+    let db_reopened = Database::open(&temp_dir).expect("Failed to reopen DB");
+    let retrieved_reopened = db_reopened
+        .get_ca(&ca_id)
+        .expect("Failed to get CA from reopened DB");
+    assert_eq!(retrieved_reopened, decl);
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
