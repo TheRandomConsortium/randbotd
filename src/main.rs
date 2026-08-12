@@ -157,7 +157,7 @@ async fn main() {
         Ok(pb) => {
             println!(
                 "  -> Loaded {} peer records from {}",
-                pb.peers.len(),
+                pb.all_peers().len(),
                 pb_path.display()
             );
             pb
@@ -171,6 +171,10 @@ async fn main() {
         }
     };
     let shared_phonebook = Arc::new(RwLock::new(phonebook));
+    shared_phonebook
+        .write()
+        .unwrap()
+        .set_my_pubkey(&identity.verifying_key().to_bytes());
 
     // 4.1. Initialize Transactional Embedded Database (NET-04)
     let db = match storage::db::Database::open(&base_state_dir) {
@@ -210,11 +214,6 @@ async fn main() {
         DEFAULT_GOSSIP_TTL,
         PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT,
         ann_bytes,
-    );
-    shared_phonebook.write().unwrap().upsert_peer(
-        &identity.verifying_key().to_bytes(),
-        &external_addr_str,
-        seed_mode,
     );
 
     // 5. Bind UDP Socket & Initialize Gossip Router
@@ -303,9 +302,12 @@ async fn main() {
         }
     });
 
-    // 6. Connect & Handshake to Bootstrap Seed Peers
-    println!("\n[NET-02] Connecting to Bootstrap Seed Peers...");
-    let mut seed_addrs = shared_phonebook.read().unwrap().verified_seed_addresses();
+    let mut seed_addrs = crate::net::phonebook::bootstrap_seed_addresses();
+    for addr in shared_phonebook.read().unwrap().verified_seed_addresses() {
+        if !seed_addrs.contains(&addr) {
+            seed_addrs.push(addr);
+        }
+    }
 
     // Include explicit --peer argument if provided
     if let Some(peer_str) = &explicit_peer {

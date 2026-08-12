@@ -1,3 +1,5 @@
+pub mod handler;
+
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,8 @@ pub enum IpcCommand {
         peer_addr: String,
     },
     PublishCa {
+        #[serde(default)]
+        ca_id_hex: Option<String>,
         common_name: String,
         organization: Option<String>,
         organizational_unit: Option<String>,
@@ -21,6 +25,10 @@ pub enum IpcCommand {
         email: Option<String>,
         is_intermediate: bool,
         path_len_constraint: Option<u32>,
+        #[serde(default)]
+        is_draft: Option<bool>,
+        #[serde(default)]
+        key_algorithm: Option<crate::crypto::agility::KeyAlgorithm>,
     },
 }
 
@@ -37,7 +45,6 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    #[allow(dead_code)]
     pub fn new(socket_path: PathBuf, phonebook: Arc<RwLock<Phonebook>>) -> Self {
         Self {
             socket_path,
@@ -51,11 +58,9 @@ impl IpcServer {
         phonebook: Arc<RwLock<Phonebook>>,
         db: Arc<Database>,
     ) -> Self {
-        Self {
-            socket_path,
-            phonebook,
-            db: Some(db),
-        }
+        let mut server = Self::new(socket_path, phonebook);
+        server.db = Some(db);
+        server
     }
 
     /// Spawns the Unix Domain Socket IPC listener loop in a background tokio task
@@ -73,7 +78,7 @@ impl IpcServer {
                 Ok(l) => l,
                 Err(e) => {
                     eprintln!(
-                        "  -> Warning: Could not bind IPC Unix socket at {}: {}",
+                        "  -> IPC SERVER ERROR: Failed to bind socket {}: {}",
                         self.socket_path.display(),
                         e
                     );
@@ -82,7 +87,7 @@ impl IpcServer {
             };
 
             println!(
-                "  -> IPC Daemon Control Listener active at {}",
+                "  -> Local Daemon IPC Control Server ACTIVE on {}",
                 self.socket_path.display()
             );
 
@@ -98,90 +103,8 @@ impl IpcServer {
 
                             if buf_reader.read_line(&mut line).await.is_ok() {
                                 let response = match serde_json::from_str::<IpcCommand>(&line) {
-                                    Ok(IpcCommand::ImportPeer { peer_addr }) => {
-                                        let addr_clean = peer_addr.trim().to_string();
-                                        if addr_clean.is_empty() {
-                                            IpcResponse::Error {
-                                                reason: "Empty peer address provided".to_string(),
-                                            }
-                                        } else {
-                                            let mut pb = phonebook.write().unwrap();
-                                            pb.add_peer(addr_clean.clone());
-                                            IpcResponse::Ok {
-                                                message: format!(
-                                                    "Peer `{}` successfully imported into phonebook",
-                                                    addr_clean
-                                                ),
-                                            }
-                                        }
-                                    }
-                                    Ok(IpcCommand::PublishCa {
-                                        common_name,
-                                        organization,
-                                        organizational_unit,
-                                        locality,
-                                        state_or_province,
-                                        country,
-                                        email,
-                                        is_intermediate,
-                                        path_len_constraint,
-                                    }) => {
-                                        let subject = crate::crypto::ca::CaSubjectMetadata {
-                                            common_name,
-                                            organization,
-                                            organizational_unit,
-                                            locality,
-                                            state_or_province,
-                                            country,
-                                            email,
-                                        };
-
-                                        match subject.validate() {
-                                            Err(e) => IpcResponse::Error { reason: e },
-                                            Ok(()) => {
-                                                let created_at = std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs();
-                                                let ca_id = crate::crypto::ca::compute_ca_id(
-                                                    subject.common_name.as_bytes(),
-                                                );
-                                                match crate::crypto::ca::CaDeclaration::new(
-                                                    ca_id,
-                                                    subject.clone(),
-                                                    subject,
-                                                    is_intermediate,
-                                                    path_len_constraint,
-                                                    created_at,
-                                                ) {
-                                                    Err(e) => IpcResponse::Error { reason: e },
-                                                    Ok(decl) => {
-                                                        let ca_id_hex = ca_id
-                                                            .iter()
-                                                            .map(|b| format!("{:02x}", b))
-                                                            .collect::<String>();
-                                                        if let Some(ref database) = db {
-                                                            match database.insert_ca(decl) {
-                                                                Ok(_) => IpcResponse::Ok {
-                                                                    message: format!(
-                                                                        "CA published successfully with ID `{}`",
-                                                                        ca_id_hex
-                                                                    ),
-                                                                },
-                                                                Err(e) => IpcResponse::Error { reason: e },
-                                                            }
-                                                        } else {
-                                                            IpcResponse::Ok {
-                                                                message: format!(
-                                                                    "CA declaration validated with ID `{}`",
-                                                                    ca_id_hex
-                                                                ),
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+                                    Ok(cmd) => {
+                                        handler::handle_ipc_command(cmd, &phonebook, db.as_ref())
                                     }
                                     Err(err) => IpcResponse::Error {
                                         reason: format!("Invalid IPC command JSON: {}", err),
@@ -274,6 +197,7 @@ mod tests {
         let (reader, mut writer) = stream.into_split();
 
         let cmd = IpcCommand::PublishCa {
+            ca_id_hex: None,
             common_name: "The Random Consortium Root CA".to_string(),
             organization: Some("The Random Consortium".to_string()),
             organizational_unit: Some("PKI".to_string()),
@@ -283,6 +207,8 @@ mod tests {
             email: Some("root@consortium.rand".to_string()),
             is_intermediate: false,
             path_len_constraint: None,
+            is_draft: None,
+            key_algorithm: None,
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -302,6 +228,160 @@ mod tests {
         let cas = db.list_cas();
         assert_eq!(cas.len(), 1);
         assert_eq!(cas[0].subject.common_name, "The Random Consortium Root CA");
+        assert!(!cas[0].is_draft);
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_ipc_ca_draft_and_edit_roundtrip() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("randbotd_ipc_draft_test_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let socket_path = temp_dir.join("randbotd.sock");
+
+        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
+        let db = Arc::new(Database::open(&temp_dir).unwrap());
+        let server =
+            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+        let handle = server.spawn();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let stream = UnixStream::connect(&socket_path).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+
+        // 1. Create a draft CA
+        let draft_cmd = IpcCommand::PublishCa {
+            ca_id_hex: None,
+            common_name: "Consortium Draft CA".to_string(),
+            organization: Some("The Random Consortium".to_string()),
+            organizational_unit: None,
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+            is_intermediate: false,
+            path_len_constraint: None,
+            is_draft: Some(true),
+            key_algorithm: None,
+        };
+        let cmd_line = serde_json::to_string(&draft_cmd).unwrap() + "\n";
+        writer.write_all(cmd_line.as_bytes()).await.unwrap();
+
+        let mut buf_reader = BufReader::new(reader);
+        let mut resp_line = String::new();
+        buf_reader.read_line(&mut resp_line).await.unwrap();
+
+        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
+        let ca_id_hex = match resp {
+            IpcResponse::Ok { message } => {
+                assert!(message.contains("draft saved"));
+                message.split('`').nth(1).unwrap().to_string()
+            }
+            _ => panic!("Expected Ok response"),
+        };
+
+        let cas = db.list_cas();
+        assert_eq!(cas.len(), 1);
+        assert!(cas[0].is_draft);
+
+        // 2. Edit existing draft CA and finalize publish (is_draft = false)
+        let stream2 = UnixStream::connect(&socket_path).await.unwrap();
+        let (reader2, mut writer2) = stream2.into_split();
+
+        let edit_cmd = IpcCommand::PublishCa {
+            ca_id_hex: Some(ca_id_hex.clone()),
+            common_name: "Consortium Final CA".to_string(),
+            organization: Some("The Random Consortium".to_string()),
+            organizational_unit: Some("PKI Operations".to_string()),
+            locality: Some("Valencia".to_string()),
+            state_or_province: Some("Valencia".to_string()),
+            country: Some("ES".to_string()),
+            email: Some("ca@therandomconsortium.org".to_string()),
+            is_intermediate: false,
+            path_len_constraint: None,
+            is_draft: Some(false),
+            key_algorithm: None,
+        };
+        let edit_line = serde_json::to_string(&edit_cmd).unwrap() + "\n";
+        writer2.write_all(edit_line.as_bytes()).await.unwrap();
+
+        let mut buf_reader2 = BufReader::new(reader2);
+        let mut resp_line2 = String::new();
+        buf_reader2.read_line(&mut resp_line2).await.unwrap();
+
+        let resp2: IpcResponse = serde_json::from_str(&resp_line2).unwrap();
+        match resp2 {
+            IpcResponse::Ok { message } => {
+                assert!(message.contains("published successfully"));
+            }
+            _ => panic!("Expected Ok response for edit"),
+        }
+
+        let cas_updated = db.list_cas();
+        assert_eq!(cas_updated.len(), 1);
+        assert_eq!(cas_updated[0].subject.common_name, "Consortium Final CA");
+        assert!(!cas_updated[0].is_draft);
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_ipc_publish_ca_with_key_algorithms() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("randbotd_ipc_algo_test_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let socket_path = temp_dir.join("randbotd.sock");
+
+        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
+        let db = Arc::new(Database::open(&temp_dir).unwrap());
+        let server =
+            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+        let handle = server.spawn();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let stream = UnixStream::connect(&socket_path).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+
+        let cmd = IpcCommand::PublishCa {
+            ca_id_hex: None,
+            common_name: "Consortium ML-DSA-44 PQC Root CA".to_string(),
+            organization: Some("The Random Consortium".to_string()),
+            organizational_unit: Some("PKI PQC".to_string()),
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+            is_intermediate: false,
+            path_len_constraint: None,
+            is_draft: None,
+            key_algorithm: Some(crate::crypto::agility::KeyAlgorithm::MlDsa44),
+        };
+        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
+        writer.write_all(cmd_line.as_bytes()).await.unwrap();
+
+        let mut buf_reader = BufReader::new(reader);
+        let mut resp_line = String::new();
+        buf_reader.read_line(&mut resp_line).await.unwrap();
+
+        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
+        match resp {
+            IpcResponse::Ok { message } => {
+                assert!(message.contains("published successfully"));
+            }
+            _ => panic!("Expected Ok response, got {:?}", resp),
+        }
+
+        let cas = db.list_cas();
+        assert_eq!(cas.len(), 1);
+        assert_eq!(
+            cas[0].key_algorithm,
+            crate::crypto::agility::KeyAlgorithm::MlDsa44
+        );
 
         handle.abort();
         let _ = std::fs::remove_dir_all(temp_dir);

@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SEED_DOMAIN: &str = "therandomconsortium.org:43210";
 
+pub const ZERO_PUBKEY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerEntry {
     pub pubkey_hex: String,
@@ -16,9 +18,6 @@ pub struct PeerEntry {
     /// Capability claim advertised by the remote node in its handshake / AddressAnnouncement
     pub self_declared_seed: bool,
     /// Verified seed status confirmed locally by the node.
-    /// NOTE: Web-of-Trust (WoT) seed promotion relies on behavioral score ponderation (`REP-03`).
-    /// Until `REP-03` ponderation is fully implemented, newly discovered nodes remain `verified_seed = false`
-    /// to prevent unverified self-declared seeds from polluting the bootstrap tier.
     pub verified_seed: bool,
     /// Behavioral ponderation / Web-of-Trust score (0 to 100). Reserved for `REP-03`.
     pub ponderation_score: u32,
@@ -27,43 +26,39 @@ pub struct PeerEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Phonebook {
     pub peers: HashMap<String, PeerEntry>,
+    #[serde(skip)]
+    pub pending_dial_peers: Vec<String>,
+    #[serde(skip)]
+    pub file_path: Option<std::path::PathBuf>,
+    #[serde(skip)]
+    pub my_pubkey_hex: Option<String>,
 }
 
 impl Phonebook {
     pub fn new() -> Self {
-        let mut pb = Self {
+        Self {
             peers: HashMap::new(),
-        };
-        pb.add_default_seed();
-        pb
+            pending_dial_peers: Vec::new(),
+            file_path: None,
+            my_pubkey_hex: None,
+        }
     }
 
-    pub fn add_default_seed(&mut self) {
-        let seed_entry = PeerEntry {
-            pubkey_hex: "0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-            address: DEFAULT_SEED_DOMAIN.to_string(),
-            last_seen: current_timestamp(),
-            self_declared_seed: true,
-            verified_seed: true,
-            ponderation_score: 50,
-        };
-        self.peers
-            .insert(DEFAULT_SEED_DOMAIN.to_string(), seed_entry);
+    pub fn set_my_pubkey(&mut self, pubkey: &[u8; 32]) {
+        self.my_pubkey_hex = Some(hex_encode(pubkey));
     }
 
     pub fn load_from_file(path: &Path) -> io::Result<Self> {
         if !path.exists() {
-            let pb = Self::new();
+            let mut pb = Self::new();
+            pb.file_path = Some(path.to_path_buf());
             let _ = pb.save_to_file(path);
             return Ok(pb);
         }
         let data = fs::read_to_string(path)?;
         let mut pb: Phonebook = serde_json::from_str(&data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        if pb.peers.is_empty() {
-            pb.add_default_seed();
-        }
+        pb.file_path = Some(path.to_path_buf());
         Ok(pb)
     }
 
@@ -73,8 +68,22 @@ impl Phonebook {
         fs::write(path, data)
     }
 
+    pub fn auto_save(&self) {
+        if let Some(ref path) = self.file_path {
+            let _ = self.save_to_file(path);
+        }
+    }
+
     pub fn upsert_peer(&mut self, pubkey: &[u8; 32], address: &str, self_declared_seed: bool) {
+        if pubkey == &[0u8; 32] {
+            return;
+        }
         let pubkey_hex = hex_encode(pubkey);
+        if let Some(ref my_pk) = self.my_pubkey_hex {
+            if &pubkey_hex == my_pk {
+                return;
+            }
+        }
         let is_currently_verified = self
             .peers
             .get(address)
@@ -90,6 +99,7 @@ impl Phonebook {
             ponderation_score: 50,
         };
         self.peers.insert(address.to_string(), entry);
+        self.auto_save();
     }
 
     pub fn resolve_peer_addresses(&self) -> Vec<std::net::SocketAddr> {
@@ -115,21 +125,20 @@ impl Phonebook {
     }
 
     pub fn add_peer(&mut self, address: String) {
-        let addr_key = address.clone();
-        self.peers.entry(addr_key).or_insert_with(|| PeerEntry {
-            pubkey_hex: "0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-            address,
-            last_seen: current_timestamp(),
-            self_declared_seed: false,
-            verified_seed: false,
-            ponderation_score: 50,
-        });
+        let clean = address.trim().to_string();
+        if !clean.is_empty() && !self.pending_dial_peers.contains(&clean) {
+            self.pending_dial_peers.push(clean);
+        }
     }
 
-    #[allow(dead_code)]
     pub fn all_peers(&self) -> Vec<String> {
-        self.peers.keys().cloned().collect()
+        let mut list: Vec<String> = self.peers.keys().cloned().collect();
+        for pending in &self.pending_dial_peers {
+            if !list.contains(pending) {
+                list.push(pending.clone());
+            }
+        }
+        list
     }
 
     /// Randomly samples up to `max_count` (e.g. 8) active peer addresses from local phonebook map
@@ -138,9 +147,13 @@ impl Phonebook {
 
         let mut candidates: Vec<String> = self
             .peers
-            .keys()
-            .filter(|&addr| addr != exclude_peer)
-            .cloned()
+            .iter()
+            .filter(|(addr, entry)| {
+                addr.as_str() != exclude_peer
+                    && entry.pubkey_hex != ZERO_PUBKEY
+                    && !entry.pubkey_hex.is_empty()
+            })
+            .map(|(addr, _)| addr.clone())
             .collect();
 
         let mut rng = rand::thread_rng();
@@ -148,6 +161,14 @@ impl Phonebook {
         candidates.truncate(max_count);
         candidates
     }
+}
+
+pub fn bootstrap_seed_addresses() -> Vec<std::net::SocketAddr> {
+    let mut addrs = Vec::new();
+    if let Ok(resolved) = DEFAULT_SEED_DOMAIN.to_socket_addrs() {
+        addrs.extend(resolved);
+    }
+    addrs
 }
 
 fn current_timestamp() -> u64 {
@@ -166,23 +187,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_phonebook_default_seed() {
-        let pb = Phonebook::new();
-        assert!(pb.peers.contains_key(DEFAULT_SEED_DOMAIN));
-        let seed = pb.peers.get(DEFAULT_SEED_DOMAIN).unwrap();
-        assert!(seed.verified_seed);
-        assert!(seed.self_declared_seed);
+    fn test_phonebook_bootstrap_seed_addresses() {
+        let addrs = bootstrap_seed_addresses();
+        assert!(!addrs.is_empty());
     }
 
     #[test]
     fn test_phonebook_sample_random_peers() {
         let mut pb = Phonebook::new();
         for i in 1..=15 {
-            pb.add_peer(format!("192.168.1.{}:43210", i));
+            let key = [(i % 255) as u8; 32];
+            pb.upsert_peer(&key, &format!("192.168.1.{}:43210", i), false);
         }
 
         let sampled = pb.sample_random_peers(8, "192.168.1.1:43210");
         assert!(sampled.len() <= 8);
         assert!(!sampled.contains(&"192.168.1.1:43210".to_string()));
+    }
+
+    #[test]
+    fn test_phonebook_add_peer_and_all_peers() {
+        let mut pb = Phonebook::new();
+        pb.add_peer("127.0.0.1:43210".to_string());
+        assert!(pb.all_peers().contains(&"127.0.0.1:43210".to_string()));
     }
 }

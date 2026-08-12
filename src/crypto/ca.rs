@@ -99,6 +99,12 @@ impl CaSubjectMetadata {
     }
 }
 
+use crate::crypto::agility::KeyAlgorithm;
+
+fn default_key_algorithm() -> KeyAlgorithm {
+    KeyAlgorithm::Ed25519
+}
+
 /// Declaration payload for a Root or Intermediate Certificate Authority (CA)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaDeclaration {
@@ -108,6 +114,10 @@ pub struct CaDeclaration {
     pub is_intermediate: bool,
     pub path_len_constraint: Option<u32>,
     pub created_at: u64,
+    #[serde(default)]
+    pub is_draft: bool,
+    #[serde(default = "default_key_algorithm")]
+    pub key_algorithm: KeyAlgorithm,
 }
 
 impl CaDeclaration {
@@ -119,6 +129,52 @@ impl CaDeclaration {
         is_intermediate: bool,
         path_len_constraint: Option<u32>,
         created_at: u64,
+    ) -> Result<Self, String> {
+        Self::new_with_draft_and_algorithm(
+            ca_id,
+            subject,
+            issuer,
+            is_intermediate,
+            path_len_constraint,
+            created_at,
+            false,
+            KeyAlgorithm::Ed25519,
+        )
+    }
+
+    /// Constructs and validates a new CaDeclaration with explicit draft status
+    pub fn new_with_draft(
+        ca_id: [u8; 32],
+        subject: CaSubjectMetadata,
+        issuer: CaSubjectMetadata,
+        is_intermediate: bool,
+        path_len_constraint: Option<u32>,
+        created_at: u64,
+        is_draft: bool,
+    ) -> Result<Self, String> {
+        Self::new_with_draft_and_algorithm(
+            ca_id,
+            subject,
+            issuer,
+            is_intermediate,
+            path_len_constraint,
+            created_at,
+            is_draft,
+            KeyAlgorithm::Ed25519,
+        )
+    }
+
+    /// Constructs and validates a new CaDeclaration with explicit draft status and key algorithm
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_draft_and_algorithm(
+        ca_id: [u8; 32],
+        subject: CaSubjectMetadata,
+        issuer: CaSubjectMetadata,
+        is_intermediate: bool,
+        path_len_constraint: Option<u32>,
+        created_at: u64,
+        is_draft: bool,
+        key_algorithm: KeyAlgorithm,
     ) -> Result<Self, String> {
         subject.validate()?;
         issuer.validate()?;
@@ -137,6 +193,8 @@ impl CaDeclaration {
             is_intermediate,
             path_len_constraint,
             created_at,
+            is_draft,
+            key_algorithm,
         })
     }
 }
@@ -233,5 +291,18 @@ mod tests {
             1700000000,
         );
         assert!(decl_ok.is_ok());
+
+        // Draft mode constructor test
+        let draft_ok = CaDeclaration::new_with_draft(
+            ca_id,
+            subject.clone(),
+            subject,
+            true,
+            Some(1),
+            1700000000,
+            true,
+        );
+        assert!(draft_ok.is_ok());
+        assert!(draft_ok.unwrap().is_draft);
     }
 }
