@@ -1,20 +1,21 @@
 //! CA-03 Multi-Network Domain Proofs Engine
 //! Exposes domain proof classification, challenges, Ed25519 signature verification,
 //! active REAL DNS network resolution (Upstream Clearnet -> Handshake daemon -> Error),
-//! HTTP Nonce fetching (Tor/I2P proxy), and network capability routing.
+//! HTTP Nonce fetching (Tor/I2P proxy), TLS ALPN proofing, I2P SAM bridge streaming,
+//! and network capability routing.
 
-use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
-use crate::crypto::identity::NodeIdentity;
 use crate::crypto::proof_net::{
-    check_dns_resolves, fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json,
-    send_udp_dns_txt_query,
+    check_dns_resolves, fetch_http_nonce, fetch_i2p_sam_nonce, fetch_tls_alpn_nonce,
+    parse_dns_txt_record, parse_http_nonce_json, send_udp_dns_txt_query,
 };
+
+pub use crate::crypto::proof_net::DomainProofResponse;
 
 /// Supported domain network ecosystems in randbotd
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -80,6 +81,8 @@ impl fmt::Display for DomainNetworkType {
 pub enum DomainProofMethod {
     DnsTxt,
     HttpNonceFallback,
+    TlsAlpn,
+    I2pSamBridge,
 }
 
 /// Domain proof verification errors
@@ -173,81 +176,6 @@ impl DomainProofChallenge {
     }
 }
 
-/// Signed response payload proving domain control
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DomainProofResponse {
-    pub challenge_id: String,
-    pub domain: String,
-    pub node_pubkey: [u8; 32],
-    pub signature: Vec<u8>,
-    pub proof_method: DomainProofMethod,
-}
-
-impl DomainProofResponse {
-    pub fn create_signed(
-        challenge: &DomainProofChallenge,
-        node_identity: &NodeIdentity,
-        proof_method: DomainProofMethod,
-    ) -> Self {
-        let message_bytes = challenge.construct_signing_bytes();
-        let sig = node_identity.signing_key().sign(&message_bytes);
-
-        Self {
-            challenge_id: challenge.challenge_id.clone(),
-            domain: challenge.domain.clone(),
-            node_pubkey: node_identity.verifying_key().to_bytes(),
-            signature: sig.to_bytes().to_vec(),
-            proof_method,
-        }
-    }
-
-    pub fn to_dns_txt_record(&self, nonce: &[u8; 32]) -> String {
-        format!(
-            "randbotd-proof={}:{}:{}",
-            hex::encode(nonce),
-            hex::encode(self.node_pubkey),
-            hex::encode(&self.signature)
-        )
-    }
-
-    pub fn verify_signature(&self, challenge: &DomainProofChallenge) -> Result<(), ProofError> {
-        if self.domain.to_lowercase() != challenge.domain.to_lowercase() {
-            return Err(ProofError::ConfigMismatch(format!(
-                "Domain in response `{}` does not match challenge domain `{}`",
-                self.domain, challenge.domain
-            )));
-        }
-
-        if self.challenge_id != challenge.challenge_id {
-            return Err(ProofError::ConfigMismatch(format!(
-                "Challenge ID mismatch: `{}` vs `{}`",
-                self.challenge_id, challenge.challenge_id
-            )));
-        }
-
-        if self.signature.len() != 64 {
-            return Err(ProofError::InvalidSignature(format!(
-                "Signature length {} invalid (expected 64 bytes)",
-                self.signature.len()
-            )));
-        }
-
-        let mut sig_arr = [0u8; 64];
-        sig_arr.copy_from_slice(&self.signature);
-
-        let message_bytes = challenge.construct_signing_bytes();
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&self.node_pubkey)
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid Ed25519 pubkey: {}", e)))?;
-        let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
-
-        verifying_key
-            .verify_strict(&message_bytes, &signature)
-            .map_err(|e| {
-                ProofError::InvalidSignature(format!("Signature verification failed: {}", e))
-            })
-    }
-}
-
 /// Multi-network domain proof verifier & active resolver manager
 pub struct DomainProofVerifier;
 
@@ -282,7 +210,7 @@ impl DomainProofVerifier {
                     Ok(())
                 } else {
                     Err(ProofError::BackendUnreachable(
-                        "I2P proxy port (7656) is not configured".to_string(),
+                        "I2P proxy port or SAM bridge port is not configured".to_string(),
                     ))
                 }
             }
@@ -299,17 +227,15 @@ impl DomainProofVerifier {
     pub fn parse_http_nonce_json(
         json_str: &str,
         challenge: &DomainProofChallenge,
+        proof_method: DomainProofMethod,
     ) -> Result<DomainProofResponse, ProofError> {
-        parse_http_nonce_json(json_str, challenge)
+        parse_http_nonce_json(json_str, challenge, proof_method)
     }
 
-    /// Performs active live network resolution and domain proof verification:
-    /// 1. `.onion` => Tor SOCKS proxy HTTP Nonce
-    /// 2. `.i2p` => I2P HTTP proxy HTTP Nonce
-    /// 3. Checks Upstream Clearnet DNS (Quad9 9.9.9.9:53) FOR REAL -> Clearnet
-    /// 4. Checks Handshake DNS daemon (127.0.0.1:53493) FOR REAL -> Handshake
-    /// 5. Tries HTTP Nonce Fallback
-    /// 6. If all fail => Returns ProofError::UnresolvableDomain
+    /// Performs active live network resolution and domain proof verification across:
+    /// 1. `.onion` => Tor TLS ALPN ("randbotd-alpn/1") -> SOCKS proxy HTTP Nonce fallback
+    /// 2. `.i2p` => I2P SAM Bridge STREAM session (7656) -> HTTP proxy Nonce fallback (4444)
+    /// 3. Clearnet / Handshake => Upstream DNS TXT -> Handshake DNS daemon TXT -> HTTP Nonce fallback
     pub fn verify_active_domain_control(
         challenge: &DomainProofChallenge,
         config: &DaemonConfig,
@@ -321,12 +247,44 @@ impl DomainProofVerifier {
         Self::check_backend_capability(detected_net, config)?;
 
         match detected_net {
-            DomainNetworkType::Tor => fetch_http_nonce(domain, DomainNetworkType::Tor, config)
-                .map_err(ProofError::UnresolvableDomain)
-                .and_then(|json| Self::parse_http_nonce_json(&json, challenge)),
-            DomainNetworkType::I2P => fetch_http_nonce(domain, DomainNetworkType::I2P, config)
-                .map_err(ProofError::UnresolvableDomain)
-                .and_then(|json| Self::parse_http_nonce_json(&json, challenge)),
+            DomainNetworkType::Tor => {
+                if let Ok(json) = fetch_tls_alpn_nonce(domain, DomainNetworkType::Tor, config) {
+                    if let Ok(resp) =
+                        Self::parse_http_nonce_json(&json, challenge, DomainProofMethod::TlsAlpn)
+                    {
+                        return Ok(resp);
+                    }
+                }
+                fetch_http_nonce(domain, DomainNetworkType::Tor, config)
+                    .map_err(ProofError::UnresolvableDomain)
+                    .and_then(|json| {
+                        Self::parse_http_nonce_json(
+                            &json,
+                            challenge,
+                            DomainProofMethod::HttpNonceFallback,
+                        )
+                    })
+            }
+            DomainNetworkType::I2P => {
+                if let Ok(json) = fetch_i2p_sam_nonce(domain, config) {
+                    if let Ok(resp) = Self::parse_http_nonce_json(
+                        &json,
+                        challenge,
+                        DomainProofMethod::I2pSamBridge,
+                    ) {
+                        return Ok(resp);
+                    }
+                }
+                fetch_http_nonce(domain, DomainNetworkType::I2P, config)
+                    .map_err(ProofError::UnresolvableDomain)
+                    .and_then(|json| {
+                        Self::parse_http_nonce_json(
+                            &json,
+                            challenge,
+                            DomainProofMethod::HttpNonceFallback,
+                        )
+                    })
+            }
             DomainNetworkType::Clearnet => {
                 let upstream_resolver = config
                     .handshake
@@ -345,7 +303,13 @@ impl DomainProofVerifier {
 
                 fetch_http_nonce(domain, DomainNetworkType::Clearnet, config)
                     .map_err(ProofError::UnresolvableDomain)
-                    .and_then(|json| Self::parse_http_nonce_json(&json, challenge))
+                    .and_then(|json| {
+                        Self::parse_http_nonce_json(
+                            &json,
+                            challenge,
+                            DomainProofMethod::HttpNonceFallback,
+                        )
+                    })
             }
             DomainNetworkType::Handshake => {
                 let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
@@ -362,7 +326,13 @@ impl DomainProofVerifier {
 
                 fetch_http_nonce(domain, DomainNetworkType::Handshake, config)
                     .map_err(ProofError::UnresolvableDomain)
-                    .and_then(|json| Self::parse_http_nonce_json(&json, challenge))
+                    .and_then(|json| {
+                        Self::parse_http_nonce_json(
+                            &json,
+                            challenge,
+                            DomainProofMethod::HttpNonceFallback,
+                        )
+                    })
             }
         }
     }
@@ -425,6 +395,7 @@ mod tests {
             identity.verifying_key().to_bytes()
         );
     }
+
     #[test]
     fn test_proof_error_unresolvable_domain_construction() {
         let err = DomainProofVerifier::fail_unresolvable_domain("nonexistent.randºm", "NXDOMAIN");
@@ -451,7 +422,12 @@ mod tests {
         })
         .to_string();
 
-        assert!(DomainProofVerifier::parse_http_nonce_json(&json_payload, &challenge).is_ok());
+        assert!(DomainProofVerifier::parse_http_nonce_json(
+            &json_payload,
+            &challenge,
+            DomainProofMethod::HttpNonceFallback
+        )
+        .is_ok());
     }
 
     #[test]

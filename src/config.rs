@@ -29,9 +29,11 @@ impl Default for NetworkConfig {
 pub struct PrivacyConfig {
     pub tor_socks_proxy: Option<String>,
     pub i2p_proxy_port: Option<u16>,
+    pub i2p_sam_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+
 pub struct HandshakeConfig {
     pub hns_dns_port: Option<u16>,
     pub hns_recursive_port: Option<u16>,
@@ -114,9 +116,10 @@ impl DaemonConfig {
             .unwrap_or(false)
     }
 
-    /// Checks if I2P proxy port is configured
+    /// Checks if I2P proxy port or SAM port is configured
     pub fn has_i2p_support(&self) -> bool {
         self.privacy.i2p_proxy_port.map(|p| p > 0).unwrap_or(false)
+            || self.privacy.i2p_sam_port.map(|p| p > 0).unwrap_or(false)
     }
 
     /// Checks if Handshake DNS resolution is enabled

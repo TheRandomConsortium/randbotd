@@ -321,7 +321,11 @@ fn handle_verify_domain_proof(
             },
         }
     } else if let Some(json_val) = http_json {
-        match DomainProofVerifier::parse_http_nonce_json(&json_val, &challenge) {
+        match DomainProofVerifier::parse_http_nonce_json(
+            &json_val,
+            &challenge,
+            crate::crypto::proof::DomainProofMethod::HttpNonceFallback,
+        ) {
             Ok(resp) => IpcResponse::Ok {
                 message: format!(
                     "HTTP Nonce domain proof verified successfully for `{}` (node pubkey: {})",
