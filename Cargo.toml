@@ -1,6 +1,6 @@
 [package]
 name = "randbotd"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2021"
 authors = ["The Random Consortium"]
 description = "Random Consortium's Certificate Bot Daemon"
@@ -27,6 +27,10 @@ pqcrypto-traits = "0.3"
 igd = "0.12"
 toml = "0.8"
 hex = "0.4"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+webpki-roots = "0.25"
+
+
 
 
 [package.metadata.deb]

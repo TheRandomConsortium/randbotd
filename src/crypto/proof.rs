@@ -10,10 +10,12 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
+use crate::crypto::proof_i2p::fetch_i2p_sam_nonce;
 use crate::crypto::proof_net::{
-    check_dns_resolves, fetch_http_nonce, fetch_i2p_sam_nonce, fetch_tls_alpn_nonce,
-    parse_dns_txt_record, parse_http_nonce_json, send_udp_dns_txt_query,
+    check_dns_resolves, fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json,
+    send_udp_dns_txt_query,
 };
+use crate::crypto::proof_tor::fetch_tls_alpn_nonce;
 
 pub use crate::crypto::proof_net::DomainProofResponse;
 
