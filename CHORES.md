@@ -25,6 +25,15 @@ This document tracks minor maintenance tasks, refactoring needs, infrastructure 
 
 ---
 
+### DNS Resolution
+
+* [ ] **`DNS-01` Punycode / IDN Normalization Before Wire-Format Queries**: DNS wire-format queries are built at byte level in [`src/crypto/dns.rs`](file:///home/mreugenej7/git/randbotd/src/crypto/dns.rs) (`build_dns_query_packet`). A domain like `randºm` (Unicode, containing `º` U+00BA) and its Punycode ACE form `xn--randm-cka` are **not the same byte sequence** — DNS resolvers only understand the ACE form. Without normalization, `build_dns_query_packet("randºm", ...)` sends non-ASCII label bytes that will be silently rejected or misinterpreted by DNS servers, causing false `NXDOMAIN` responses for valid Handshake IDN domains. Fix: add a domain normalization step that converts each label to its ACE form (Punycode) before encoding into the wire packet. This applies to every entry point: `check_dns_resolves_config`, `send_dns_txt_query_config`, and `resolve_hns_ip`. The canonical presentation form (Unicode) should be preserved for display purposes only; all on-wire operations must use the ACE form. Crate candidate: `idna` (already used in the broader Rust ecosystem; minimal dependency, no async).
+
+  > **Workaround (current):** Domain owners can avoid this issue today by entering the domain in strict Punycode ACE form (`xn--randm-cka`) rather than the Unicode presentation form (`randºm`). Resolution will succeed correctly since the bytes match exactly what the DNS wire format expects. Automatic normalization is a UX improvement, not a correctness blocker.
+
+
+---
+
 ## ✅ Completed Chores
 
 * [x] **`NET-02` Gossip Router Seen Cache Eviction**: Implemented timestamp-bounded eviction for `GossipRouter.seen_cache` (`HashMap<[u8; 32], u64>`) to purge expired message IDs older than 1 hour (3600s) during periodic keepalive cycles.
