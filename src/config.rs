@@ -54,6 +54,33 @@ impl Default for HandshakeConfig {
     }
 }
 
+impl HandshakeConfig {
+    /// Resolves target endpoint string (IP:port, domain:port, or "daemon"/"system")
+    pub fn resolve_target_addr(&self) -> String {
+        match self.hns_dns_target.as_deref() {
+            Some("daemon") | None => {
+                let port = self.hns_dns_port.unwrap_or(53493);
+                format!("127.0.0.1:{}", port)
+            }
+            Some("system") => "system".to_string(),
+            Some(target) => {
+                let clean = target.trim();
+                if clean.contains(':') {
+                    clean.to_string()
+                } else {
+                    format!("{}:53", clean)
+                }
+            }
+        }
+    }
+
+    /// Checks if resolution mode is DoH (DNS-over-HTTPS)
+    pub fn is_doh_mode(&self) -> bool {
+        matches!(self.hns_dns_mode.as_deref(), Some("doh") | Some("https"))
+    }
+
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StorageConfig {
     pub state_dir: Option<String>,
@@ -169,5 +196,25 @@ upstream_dns_resolver = "9.9.9.9:53"
             config.handshake.upstream_dns_resolver,
             Some("9.9.9.9:53".to_string())
         );
+    }
+
+    #[test]
+    fn test_handshake_target_and_mode_resolution() {
+        let mut hns = HandshakeConfig::default();
+        assert_eq!(hns.resolve_target_addr(), "127.0.0.1:53493");
+        assert!(!hns.is_doh_mode());
+
+
+        hns.hns_dns_target = Some("system".to_string());
+        assert_eq!(hns.resolve_target_addr(), "system");
+
+        hns.hns_dns_target = Some("10.0.0.1:5300".to_string());
+        assert_eq!(hns.resolve_target_addr(), "10.0.0.1:5300");
+
+        hns.hns_dns_target = Some("hdns.io".to_string());
+        assert_eq!(hns.resolve_target_addr(), "hdns.io:53");
+
+        hns.hns_dns_mode = Some("doh".to_string());
+        assert!(hns.is_doh_mode());
     }
 }

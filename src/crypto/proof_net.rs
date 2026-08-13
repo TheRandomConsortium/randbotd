@@ -1,10 +1,12 @@
-//! Active UDP DNS resolution, HNS IP resolution, and proof response helper module
+//! HTTP Nonce proofing, DNS TXT parsing, and proof response helper module
 
 use crate::config::DaemonConfig;
 use crate::crypto::identity::NodeIdentity;
 use crate::crypto::proof::{
     DomainNetworkType, DomainProofChallenge, DomainProofMethod, ProofError,
 };
+use crate::crypto::dns::resolve_hns_ip;
+
 use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
 
@@ -83,231 +85,6 @@ impl DomainProofResponse {
     }
 }
 
-/// Queries Handshake DNS daemon (127.0.0.1:53493) for A record IP address of Handshake domain
-pub fn resolve_hns_ip(domain: &str, resolver_addr: &str) -> Result<String, String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    socket
-        .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
-        .map_err(|e| e.to_string())?;
-
-    let qname = domain.trim_matches('.');
-    let mut query = vec![
-        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-    for label in qname.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            continue;
-        }
-        query.push(label.len() as u8);
-        query.extend_from_slice(label.as_bytes());
-    }
-    query.push(0x00);
-    query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
-
-    socket
-        .send_to(&query, resolver_addr)
-        .map_err(|e| format!("UDP send to {} failed: {}", resolver_addr, e))?;
-
-    let mut buf = [0u8; 512];
-    let (amt, _) = socket
-        .recv_from(&mut buf)
-        .map_err(|e| format!("UDP recv from {} failed: {}", resolver_addr, e))?;
-
-    let resp = &buf[..amt];
-    if amt < 12 {
-        return Err("DNS response buffer too short".to_string());
-    }
-
-    let rcode = resp[3] & 0x0F;
-    let ancount = u16::from_be_bytes([resp[6], resp[7]]);
-    if rcode != 0 || ancount == 0 {
-        return Err(format!(
-            "HNS DNS daemon returned RCODE {} with {} answers",
-            rcode, ancount
-        ));
-    }
-
-    let mut idx = 12;
-    while idx < resp.len() {
-        let len = resp[idx] as usize;
-        if len == 0 {
-            idx += 5;
-            break;
-        }
-        if (len & 0xC0) == 0xC0 {
-            idx += 6;
-            break;
-        }
-        idx += len + 1;
-    }
-
-    while idx < resp.len() {
-        if (resp[idx] & 0xC0) == 0xC0 {
-            idx += 2;
-        } else {
-            while idx < resp.len() && resp[idx] != 0 {
-                idx += (resp[idx] as usize) + 1;
-            }
-            idx += 1;
-        }
-        if idx + 10 > resp.len() {
-            break;
-        }
-        let rtype = u16::from_be_bytes([resp[idx], resp[idx + 1]]);
-        let rdlen = u16::from_be_bytes([resp[idx + 8], resp[idx + 9]]) as usize;
-        idx += 10;
-        if idx + rdlen > resp.len() {
-            break;
-        }
-        if rtype == 1 && rdlen == 4 {
-            return Ok(format!(
-                "{}.{}.{}.{}",
-                resp[idx],
-                resp[idx + 1],
-                resp[idx + 2],
-                resp[idx + 3]
-            ));
-        }
-        idx += rdlen;
-    }
-
-    Err(format!(
-        "No A record found in HNS DNS response for {}",
-        domain
-    ))
-}
-
-/// Sends a real UDP DNS query to check if a domain resolves (returns answer records with NOERROR RCODE)
-pub fn check_dns_resolves(domain: &str, resolver_addr: &str) -> bool {
-    let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    if socket
-        .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
-        .is_err()
-    {
-        return false;
-    }
-
-    let qname = domain.trim_matches('.');
-    let mut query = vec![
-        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-    for label in qname.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            continue;
-        }
-        query.push(label.len() as u8);
-        query.extend_from_slice(label.as_bytes());
-    }
-    query.push(0x00);
-    query.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
-
-    if socket.send_to(&query, resolver_addr).is_err() {
-        return false;
-    }
-
-    let mut buf = [0u8; 512];
-    let amt = match socket.recv_from(&mut buf) {
-        Ok((a, _)) => a,
-        Err(_) => return false,
-    };
-
-    if amt < 12 {
-        return false;
-    }
-    let resp = &buf[..amt];
-    let rcode = resp[3] & 0x0F;
-    let ancount = u16::from_be_bytes([resp[6], resp[7]]);
-
-    rcode == 0 && ancount > 0
-}
-
-/// Active UDP DNS TXT query helper
-pub fn send_udp_dns_txt_query(domain: &str, resolver_addr: &str) -> Result<Vec<String>, String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    socket
-        .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
-        .map_err(|e| e.to_string())?;
-
-    let qname = format!("_randbotd-challenge.{}", domain.trim_matches('.'));
-    let mut query = vec![
-        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-    for label in qname.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            continue;
-        }
-        query.push(label.len() as u8);
-        query.extend_from_slice(label.as_bytes());
-    }
-    query.push(0x00);
-    query.extend_from_slice(&[0x00, 0x10, 0x00, 0x01]);
-
-    socket
-        .send_to(&query, resolver_addr)
-        .map_err(|e| format!("UDP send to {} failed: {}", resolver_addr, e))?;
-
-    let mut buf = [0u8; 1024];
-    let (amt, _) = socket
-        .recv_from(&mut buf)
-        .map_err(|e| format!("UDP recv from {} failed: {}", resolver_addr, e))?;
-
-    let resp = &buf[..amt];
-    let mut txt_records = Vec::new();
-    let mut idx = 12;
-    while idx < resp.len() {
-        let len = resp[idx] as usize;
-        if len == 0 {
-            idx += 5;
-            break;
-        }
-        if (len & 0xC0) == 0xC0 {
-            idx += 6;
-            break;
-        }
-        idx += len + 1;
-    }
-    while idx < resp.len() {
-        if (resp[idx] & 0xC0) == 0xC0 {
-            idx += 2;
-        } else {
-            while idx < resp.len() && resp[idx] != 0 {
-                idx += (resp[idx] as usize) + 1;
-            }
-            idx += 1;
-        }
-        if idx + 10 > resp.len() {
-            break;
-        }
-        let rtype = u16::from_be_bytes([resp[idx], resp[idx + 1]]);
-        let rdlen = u16::from_be_bytes([resp[idx + 8], resp[idx + 9]]) as usize;
-        idx += 10;
-        if idx + rdlen > resp.len() {
-            break;
-        }
-        if rtype == 16 {
-            let mut rdata_idx = idx;
-            while rdata_idx < idx + rdlen {
-                let txt_len = resp[rdata_idx] as usize;
-                rdata_idx += 1;
-                if rdata_idx + txt_len <= idx + rdlen {
-                    if let Ok(s) = std::str::from_utf8(&resp[rdata_idx..rdata_idx + txt_len]) {
-                        txt_records.push(s.to_string());
-                    }
-                    rdata_idx += txt_len;
-                } else {
-                    break;
-                }
-            }
-        }
-        idx += rdlen;
-    }
-
-    Ok(txt_records)
-}
-
 /// Active HTTP GET Nonce fetcher (Tor SOCKS5 / I2P HTTP Proxy / Handshake IP resolution / Clearnet)
 pub fn fetch_http_nonce(
     domain: &str,
@@ -315,9 +92,7 @@ pub fn fetch_http_nonce(
     config: &DaemonConfig,
 ) -> Result<String, String> {
     if net_type == DomainNetworkType::Handshake {
-        let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
-        let hns_addr = format!("127.0.0.1:{}", hns_port);
-        if let Ok(ip) = resolve_hns_ip(domain, &hns_addr) {
+        if let Ok(ip) = resolve_hns_ip(domain, config) {
             let url = format!("http://{}/.well-known/randbotd-proof", ip);
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))

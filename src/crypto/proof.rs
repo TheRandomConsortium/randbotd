@@ -10,12 +10,12 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
-use crate::crypto::proof_i2p::fetch_i2p_sam_nonce;
-use crate::crypto::proof_net::{
-    check_dns_resolves, fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json,
+use crate::crypto::dns::{
+    check_dns_resolves, check_dns_resolves_config, send_dns_txt_query_config,
     send_udp_dns_txt_query,
 };
-use crate::crypto::proof_tor::fetch_tls_alpn_nonce;
+use crate::crypto::proof_net::{fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json};
+use crate::crypto::proof_overlay::{fetch_i2p_sam_nonce, fetch_tls_alpn_nonce};
 
 pub use crate::crypto::proof_net::DomainProofResponse;
 
@@ -58,9 +58,9 @@ impl DomainNetworkType {
         }
 
         if config.has_hns_support() {
-            let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
-            let hns_addr = format!("127.0.0.1:{}", hns_port);
-            if check_dns_resolves(&clean, &hns_addr) {
+            let hns_target = config.handshake.resolve_target_addr();
+            let is_doh = config.handshake.is_doh_mode();
+            if check_dns_resolves_config(&clean, &hns_target, is_doh) {
                 return Ok(DomainNetworkType::Handshake);
             }
         }
@@ -314,9 +314,9 @@ impl DomainProofVerifier {
                     })
             }
             DomainNetworkType::Handshake => {
-                let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
-                let hns_addr = format!("127.0.0.1:{}", hns_port);
-                if let Ok(records) = send_udp_dns_txt_query(domain, &hns_addr) {
+                let hns_target = config.handshake.resolve_target_addr();
+                let is_doh = config.handshake.is_doh_mode();
+                if let Ok(records) = send_dns_txt_query_config(domain, &hns_target, is_doh) {
                     for rec in records {
                         if rec.contains("randbotd-proof=") {
                             if let Ok(resp) = Self::parse_dns_txt_record(&rec, challenge) {
