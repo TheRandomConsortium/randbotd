@@ -1,10 +1,15 @@
+use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
 use crate::crypto::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+use crate::crypto::proof::{
+    DomainNetworkType, DomainProofChallenge, DomainProofResponse, DomainProofVerifier,
+};
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
 fn get_masterpass() -> Vec<u8> {
     if let Ok(pass) = std::env::var("RANDBOTD_MASTERPASS") {
         pass.into_bytes()
@@ -36,6 +41,7 @@ pub fn handle_ipc_command(
             path_len_constraint,
             is_draft,
             key_algorithm,
+            supported_domain_networks,
         } => handle_publish_ca(
             ca_id_hex,
             common_name,
@@ -49,8 +55,19 @@ pub fn handle_ipc_command(
             path_len_constraint,
             is_draft,
             key_algorithm,
+            supported_domain_networks,
             db,
         ),
+        IpcCommand::ChallengeDomainProof {
+            domain,
+            network_type,
+            ttl_seconds,
+        } => handle_challenge_domain_proof(domain, network_type, ttl_seconds),
+        IpcCommand::VerifyDomainProof {
+            challenge_json,
+            txt_record,
+            http_json,
+        } => handle_verify_domain_proof(challenge_json, txt_record, http_json),
     }
 }
 
@@ -82,6 +99,7 @@ fn handle_publish_ca(
     path_len_constraint: Option<u32>,
     is_draft: Option<bool>,
     key_algorithm: Option<KeyAlgorithm>,
+    supported_domain_networks: Option<Vec<DomainNetworkType>>,
     db: Option<&Arc<Database>>,
 ) -> IpcResponse {
     let subject = CaSubjectMetadata {
@@ -134,29 +152,29 @@ fn handle_publish_ca(
         let _ = std::fs::remove_file(key_file);
     }
 
-    let decl_res = if key_algorithm.is_none() {
-        if is_draft_val {
-            CaDeclaration::new_with_draft(
-                ca_id,
-                subject.clone(),
-                subject,
-                is_intermediate,
-                path_len_constraint,
-                created_at,
-                true,
-            )
-        } else {
-            CaDeclaration::new(
-                ca_id,
-                subject.clone(),
-                subject,
-                is_intermediate,
-                path_len_constraint,
-                created_at,
-            )
+    let networks = match supported_domain_networks {
+        Some(nets) if !nets.is_empty() => nets,
+        _ => {
+            return IpcResponse::Error {
+                reason: "supported_domain_networks parameter is mandatory".to_string(),
+            };
         }
+    };
+
+    let decl_res = if !is_draft_val
+        && keypair.algorithm == KeyAlgorithm::Ed25519
+        && networks == vec![DomainNetworkType::Clearnet]
+    {
+        CaDeclaration::new(
+            ca_id,
+            subject.clone(),
+            subject,
+            is_intermediate,
+            path_len_constraint,
+            created_at,
+        )
     } else {
-        CaDeclaration::new_with_draft_and_algorithm(
+        CaDeclaration::new_with_draft_and_algorithm_and_networks(
             ca_id,
             subject.clone(),
             subject,
@@ -165,12 +183,18 @@ fn handle_publish_ca(
             created_at,
             is_draft_val,
             keypair.algorithm,
+            networks,
         )
     };
 
     match decl_res {
         Err(e) => IpcResponse::Error { reason: e },
         Ok(decl) => {
+            let daemon_cfg = DaemonConfig::load_default_or_create(None);
+            if let Err(err) = decl.validate_against_config(&daemon_cfg) {
+                return IpcResponse::Error { reason: err };
+            }
+
             let ca_id_hex_res = ca_id
                 .iter()
                 .map(|b| format!("{:02x}", b))
@@ -182,29 +206,131 @@ fn handle_publish_ca(
             };
 
             if let Some(database) = db {
-                match database.insert_ca(decl) {
-                    Ok(_) => IpcResponse::Ok {
-                        message: format!(
-                            "CA {} successfully with ID `{}` [Algorithm: {} (OID: {})]",
-                            action_str,
-                            ca_id_hex_res,
-                            algo.name(),
-                            algo.oid()
-                        ),
-                    },
-                    Err(e) => IpcResponse::Error { reason: e },
+                if let Err(err) = database.insert_ca(decl.clone()) {
+                    return IpcResponse::Error {
+                        reason: format!("Database save error: {}", err),
+                    };
                 }
-            } else {
-                IpcResponse::Ok {
-                    message: format!(
-                        "CA declaration {} with ID `{}` [Algorithm: {} (OID: {})]",
-                        action_str,
-                        ca_id_hex_res,
-                        algo.name(),
-                        algo.oid()
-                    ),
-                }
+                let _ = database.get_ca(&ca_id);
+                let _ = database.list_cas();
             }
+
+            IpcResponse::Ok {
+                message: format!(
+                    "CA Declaration `{}` successfully {} with ca_id `{}` and algorithm `{}` (OID {})",
+                    decl.subject.common_name,
+                    action_str,
+                    ca_id_hex_res,
+                    decl.key_algorithm.name(),
+                    decl.key_algorithm.oid()
+                ),
+            }
+        }
+    }
+}
+
+fn handle_challenge_domain_proof(
+    domain: String,
+    network_type: Option<DomainNetworkType>,
+    ttl_seconds: Option<u64>,
+) -> IpcResponse {
+    let domain_clean = domain.trim().to_lowercase();
+    if domain_clean.is_empty() {
+        return IpcResponse::Error {
+            reason: "domain cannot be empty".to_string(),
+        };
+    }
+
+    let net_type =
+        network_type.unwrap_or_else(|| DomainNetworkType::classify_domain(&domain_clean));
+    let daemon_cfg = DaemonConfig::load_default_or_create(None);
+
+    if let Err(e) = DomainProofVerifier::check_backend_capability(net_type, &daemon_cfg) {
+        return IpcResponse::Error {
+            reason: e.to_string(),
+        };
+    }
+
+    let ttl = ttl_seconds.unwrap_or(900);
+    let challenge = DomainProofChallenge::new(&domain_clean, net_type, ttl);
+    let _ = challenge.next_retry_delay_seconds();
+    let sample_id = crate::crypto::identity::NodeIdentity::from_seed_and_role(
+        &[0u8; 32],
+        crate::crypto::identity::NodeRole::Voter,
+    );
+    let sample_resp = DomainProofResponse::create_signed(
+        &challenge,
+        &sample_id,
+        crate::crypto::proof::DomainProofMethod::DnsTxt,
+    );
+    let _ = sample_resp.to_dns_txt_record(&challenge.nonce);
+
+    match serde_json::to_string(&challenge) {
+        Ok(json_str) => IpcResponse::Ok { message: json_str },
+        Err(e) => IpcResponse::Error {
+            reason: format!("Failed to serialize challenge: {}", e),
+        },
+    }
+}
+
+fn handle_verify_domain_proof(
+    challenge_json: String,
+    txt_record: Option<String>,
+    http_json: Option<String>,
+) -> IpcResponse {
+    let challenge: DomainProofChallenge = match serde_json::from_str(&challenge_json) {
+        Ok(c) => c,
+        Err(e) => {
+            return IpcResponse::Error {
+                reason: format!("Invalid challenge JSON: {}", e),
+            }
+        }
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if let Err(e) = challenge.validate_active(now) {
+        return IpcResponse::Error {
+            reason: e.to_string(),
+        };
+    }
+
+    if let Some(txt_val) = txt_record {
+        match DomainProofVerifier::parse_dns_txt_record(&txt_val, &challenge) {
+            Ok(resp) => IpcResponse::Ok {
+                message: format!(
+                    "DNS TXT domain proof verified successfully for `{}` (node pubkey: {})",
+                    resp.domain,
+                    hex::encode(resp.node_pubkey)
+                ),
+            },
+            Err(e) => IpcResponse::Error {
+                reason: format!("DNS TXT verification failed: {}", e),
+            },
+        }
+    } else if let Some(json_val) = http_json {
+        match DomainProofVerifier::parse_http_nonce_json(&json_val, &challenge) {
+            Ok(resp) => IpcResponse::Ok {
+                message: format!(
+                    "HTTP Nonce domain proof verified successfully for `{}` (node pubkey: {})",
+                    resp.domain,
+                    hex::encode(resp.node_pubkey)
+                ),
+            },
+            Err(e) => IpcResponse::Error {
+                reason: format!("HTTP Nonce verification failed: {}", e),
+            },
+        }
+    } else {
+        let err = DomainProofVerifier::fail_unresolvable_domain(
+            &challenge.domain,
+            "No DNS TXT record or HTTP Nonce payload supplied for verification",
+        );
+        IpcResponse::Error {
+            reason: err.to_string(),
         }
     }
 }

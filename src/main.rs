@@ -80,17 +80,36 @@ async fn main() {
     let tor_socks_proxy = daemon_cfg.privacy.tor_socks_proxy.clone();
     let i2p_proxy_port = daemon_cfg.privacy.i2p_proxy_port;
 
-    if tor_socks_proxy.is_some() || i2p_proxy_port.is_some() {
-        println!("[NET-03] Multi-Network Overlay Proxy Routing Policy:");
-        if let Some(ref tor_addr) = tor_socks_proxy {
-            println!("  -> Tor (.onion):   SOCKS5 Proxy {}", tor_addr);
-        }
-        if let Some(i2p_port) = i2p_proxy_port {
-            println!("  -> I2P (.i2p):     SAM Proxy 127.0.0.1:{}", i2p_port);
-        }
-        println!("  -> Clearnet:       Native UDP/DNS sockets");
+    if tor_socks_proxy.is_some() || i2p_proxy_port.is_some() || daemon_cfg.has_hns_support() {
+        println!("[NET-03 / CA-03] Multi-Network Domain Capabilities:");
+        println!("  -> Clearnet:       Native ICANN DNS & HTTP Fallback (Active)");
+        println!(
+            "  -> Handshake:      {}",
+            if daemon_cfg.has_hns_support() {
+                "Active (UDP/DoH)"
+            } else {
+                "Disabled"
+            }
+        );
+        println!(
+            "  -> Tor (.onion):   {}",
+            if daemon_cfg.has_tor_support() {
+                "Active (SOCKS5)"
+            } else {
+                "Disabled"
+            }
+        );
+        println!(
+            "  -> I2P (.i2p):     {}",
+            if daemon_cfg.has_i2p_support() {
+                "Active (SAM Proxy)"
+            } else {
+                "Disabled"
+            }
+        );
         println!("  ℹ️ Notice: Clearnet peers are NOT routed over Tor/I2P proxies because exit nodes block arbitrary P2P UDP ports.\n");
     }
+
     // Resolve state directory (args.state_dir, daemon_cfg.storage.state_dir, STATE_DIRECTORY env var, or "./")
     let base_state_dir = if let Some(custom_dir) = &args.state_dir {
         std::path::PathBuf::from(custom_dir)

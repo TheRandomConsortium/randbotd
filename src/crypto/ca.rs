@@ -99,10 +99,16 @@ impl CaSubjectMetadata {
     }
 }
 
+use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
+use crate::crypto::proof::DomainNetworkType;
 
 fn default_key_algorithm() -> KeyAlgorithm {
     KeyAlgorithm::Ed25519
+}
+
+fn default_supported_domain_networks() -> Vec<DomainNetworkType> {
+    vec![DomainNetworkType::Clearnet]
 }
 
 /// Declaration payload for a Root or Intermediate Certificate Authority (CA)
@@ -118,10 +124,12 @@ pub struct CaDeclaration {
     pub is_draft: bool,
     #[serde(default = "default_key_algorithm")]
     pub key_algorithm: KeyAlgorithm,
+    #[serde(default = "default_supported_domain_networks")]
+    pub supported_domain_networks: Vec<DomainNetworkType>,
 }
 
 impl CaDeclaration {
-    /// Constructs and validates a new CaDeclaration
+    /// Constructs and validates a new CaDeclaration with default Clearnet capabilities
     pub fn new(
         ca_id: [u8; 32],
         subject: CaSubjectMetadata,
@@ -130,7 +138,7 @@ impl CaDeclaration {
         path_len_constraint: Option<u32>,
         created_at: u64,
     ) -> Result<Self, String> {
-        Self::new_with_draft_and_algorithm(
+        Self::new_with_draft_and_algorithm_and_networks(
             ca_id,
             subject,
             issuer,
@@ -139,34 +147,13 @@ impl CaDeclaration {
             created_at,
             false,
             KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet],
         )
     }
 
-    /// Constructs and validates a new CaDeclaration with explicit draft status
-    pub fn new_with_draft(
-        ca_id: [u8; 32],
-        subject: CaSubjectMetadata,
-        issuer: CaSubjectMetadata,
-        is_intermediate: bool,
-        path_len_constraint: Option<u32>,
-        created_at: u64,
-        is_draft: bool,
-    ) -> Result<Self, String> {
-        Self::new_with_draft_and_algorithm(
-            ca_id,
-            subject,
-            issuer,
-            is_intermediate,
-            path_len_constraint,
-            created_at,
-            is_draft,
-            KeyAlgorithm::Ed25519,
-        )
-    }
-
-    /// Constructs and validates a new CaDeclaration with explicit draft status and key algorithm
+    /// Constructs and validates a new CaDeclaration with full parameters including domain network capabilities
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_draft_and_algorithm(
+    pub fn new_with_draft_and_algorithm_and_networks(
         ca_id: [u8; 32],
         subject: CaSubjectMetadata,
         issuer: CaSubjectMetadata,
@@ -175,6 +162,7 @@ impl CaDeclaration {
         created_at: u64,
         is_draft: bool,
         key_algorithm: KeyAlgorithm,
+        supported_domain_networks: Vec<DomainNetworkType>,
     ) -> Result<Self, String> {
         subject.validate()?;
         issuer.validate()?;
@@ -186,6 +174,10 @@ impl CaDeclaration {
             );
         }
 
+        if supported_domain_networks.is_empty() {
+            return Err("CA must support at least one domain network type".to_string());
+        }
+
         Ok(Self {
             ca_id,
             subject,
@@ -195,7 +187,42 @@ impl CaDeclaration {
             created_at,
             is_draft,
             key_algorithm,
+            supported_domain_networks,
         })
+    }
+
+    /// Validates advertised CA capabilities against active node DaemonConfig
+    pub fn validate_against_config(&self, config: &DaemonConfig) -> Result<(), String> {
+        for net_type in &self.supported_domain_networks {
+            match net_type {
+                DomainNetworkType::Clearnet => {}
+                DomainNetworkType::Handshake => {
+                    if !config.has_hns_support() {
+                        return Err(
+                            "CA advertises Handshake support, but node has hns_dns_mode = 'none'"
+                                .to_string(),
+                        );
+                    }
+                }
+                DomainNetworkType::Tor => {
+                    if !config.has_tor_support() {
+                        return Err(
+                            "CA advertises Tor (.onion) support, but tor_socks_proxy is unconfigured"
+                                .to_string(),
+                        );
+                    }
+                }
+                DomainNetworkType::I2P => {
+                    if !config.has_i2p_support() {
+                        return Err(
+                            "CA advertises I2P (.i2p) support, but i2p_proxy_port is unconfigured"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -293,7 +320,22 @@ mod tests {
         assert!(decl_ok.is_ok());
 
         // Draft mode constructor test
-        let draft_ok = CaDeclaration::new_with_draft(
+        let draft_ok = CaDeclaration::new_with_draft_and_algorithm_and_networks(
+            ca_id,
+            subject.clone(),
+            subject.clone(),
+            true,
+            Some(1),
+            1700000000,
+            true,
+            KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet],
+        );
+        assert!(draft_ok.is_ok());
+        assert!(draft_ok.unwrap().is_draft);
+
+        // Algorithm constructor test
+        let algo_ok = CaDeclaration::new_with_draft_and_algorithm_and_networks(
             ca_id,
             subject.clone(),
             subject,
@@ -301,8 +343,45 @@ mod tests {
             Some(1),
             1700000000,
             true,
+            KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet],
         );
-        assert!(draft_ok.is_ok());
-        assert!(draft_ok.unwrap().is_draft);
+        assert!(algo_ok.is_ok());
+        assert_eq!(algo_ok.unwrap().key_algorithm, KeyAlgorithm::Ed25519);
+    }
+
+    #[test]
+    fn test_ca_declaration_network_capability_validation() {
+        let subject = CaSubjectMetadata {
+            common_name: "Multi-Net CA".to_string(),
+            organization: None,
+            organizational_unit: None,
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+        };
+        let ca_id = compute_ca_id(b"test_net_pubkey");
+
+        let decl = CaDeclaration::new_with_draft_and_algorithm_and_networks(
+            ca_id,
+            subject.clone(),
+            subject,
+            false,
+            None,
+            1700000000,
+            false,
+            KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
+        )
+        .expect("Failed to create CA declaration");
+
+        let mut config = DaemonConfig::default();
+        // Default config has no Tor support -> should fail validation
+        assert!(decl.validate_against_config(&config).is_err());
+
+        // Add Tor support -> should pass validation
+        config.privacy.tor_socks_proxy = Some("127.0.0.1:9050".to_string());
+        assert!(decl.validate_against_config(&config).is_ok());
     }
 }

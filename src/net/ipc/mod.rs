@@ -29,6 +29,22 @@ pub enum IpcCommand {
         is_draft: Option<bool>,
         #[serde(default)]
         key_algorithm: Option<crate::crypto::agility::KeyAlgorithm>,
+        #[serde(default)]
+        supported_domain_networks: Option<Vec<crate::crypto::proof::DomainNetworkType>>,
+    },
+    ChallengeDomainProof {
+        domain: String,
+        #[serde(default)]
+        network_type: Option<crate::crypto::proof::DomainNetworkType>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
+    },
+    VerifyDomainProof {
+        challenge_json: String,
+        #[serde(default)]
+        txt_record: Option<String>,
+        #[serde(default)]
+        http_json: Option<String>,
     },
 }
 
@@ -209,6 +225,9 @@ mod tests {
             path_len_constraint: None,
             is_draft: None,
             key_algorithm: None,
+            supported_domain_networks: Some(vec![
+                crate::crypto::proof::DomainNetworkType::Clearnet,
+            ]),
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -220,7 +239,9 @@ mod tests {
         let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
         match resp {
             IpcResponse::Ok { message } => {
-                assert!(message.contains("CA published successfully with ID"));
+                assert!(message.contains(
+                    "CA Declaration `The Random Consortium Root CA` successfully published"
+                ));
             }
             _ => panic!("Expected IpcResponse::Ok, got {:?}", resp),
         }
@@ -266,6 +287,9 @@ mod tests {
             path_len_constraint: None,
             is_draft: Some(true),
             key_algorithm: None,
+            supported_domain_networks: Some(vec![
+                crate::crypto::proof::DomainNetworkType::Clearnet,
+            ]),
         };
         let cmd_line = serde_json::to_string(&draft_cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -278,7 +302,7 @@ mod tests {
         let ca_id_hex = match resp {
             IpcResponse::Ok { message } => {
                 assert!(message.contains("draft saved"));
-                message.split('`').nth(1).unwrap().to_string()
+                message.split('`').nth(3).unwrap().to_string()
             }
             _ => panic!("Expected Ok response"),
         };
@@ -304,6 +328,9 @@ mod tests {
             path_len_constraint: None,
             is_draft: Some(false),
             key_algorithm: None,
+            supported_domain_networks: Some(vec![
+                crate::crypto::proof::DomainNetworkType::Clearnet,
+            ]),
         };
         let edit_line = serde_json::to_string(&edit_cmd).unwrap() + "\n";
         writer2.write_all(edit_line.as_bytes()).await.unwrap();
@@ -315,7 +342,7 @@ mod tests {
         let resp2: IpcResponse = serde_json::from_str(&resp_line2).unwrap();
         match resp2 {
             IpcResponse::Ok { message } => {
-                assert!(message.contains("published successfully"));
+                assert!(message.contains("successfully published"));
             }
             _ => panic!("Expected Ok response for edit"),
         }
@@ -360,6 +387,9 @@ mod tests {
             path_len_constraint: None,
             is_draft: None,
             key_algorithm: Some(crate::crypto::agility::KeyAlgorithm::MlDsa44),
+            supported_domain_networks: Some(vec![
+                crate::crypto::proof::DomainNetworkType::Clearnet,
+            ]),
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -371,7 +401,7 @@ mod tests {
         let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
         match resp {
             IpcResponse::Ok { message } => {
-                assert!(message.contains("published successfully"));
+                assert!(message.contains("ML-DSA-44"));
             }
             _ => panic!("Expected Ok response, got {:?}", resp),
         }

@@ -30,7 +30,6 @@ impl Database {
     }
 
     /// Retrieves a CA declaration by its ca_id
-    #[allow(dead_code)]
     pub fn get_ca(&self, ca_id: &[u8; 32]) -> Option<crate::crypto::ca::CaDeclaration> {
         self.ca_store
             .read()
@@ -39,7 +38,6 @@ impl Database {
     }
 
     /// Returns a list of all registered CA declarations
-    #[allow(dead_code)]
     pub fn list_cas(&self) -> Vec<crate::crypto::ca::CaDeclaration> {
         self.ca_store
             .read()
