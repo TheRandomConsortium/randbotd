@@ -400,7 +400,152 @@ To address the gaps identified during this comprehensive investigation, the foll
 | `CA-12` | **Multi-Tier CA Certificate Offer Catalog & Profile Engine** | Replaces single static pricing with a structured Offer Catalog (`CAPublishOfferCatalog`). Allows CAs to publish multiple `CertificateProfile` options (e.g. Profile 0: Free Standard short-TTL, Profile 1: Multi-SAN/Wildcard, Profile 2: Long-TTL Enterprise) seamlessly integrated with client `--free-only` and `account_price_ceiling` filters. | ⚪ |
 | `CA-13` | **Cryptographic Certificate Serial Entropy Engine** | Standard-compliant generator (RFC 5280 / CABF BR §7.1.4.2.1) injecting 64-160 bits of CSPRNG entropy into X.509 certificate serial numbers (`CertificateSerialNumber`) to immunize certificate issuance against hash collision and serial prediction attacks. | 🔴 |
 | `CA-14` | **Subtree Name Constraints Engine (`permittedSubtrees`/`excludedSubtrees`)** | Standard-compliant implementation of X.509 v3 Name Constraints extension (RFC 5280 §4.2.1.10) marked `critical = TRUE`. Allows Intermediate CAs to be cryptographically restricted to specific domain namespaces (e.g., strictly `.hns`, `.onion`, `.i2p`, or specific domain subtrees). | 🔴 |
-| `CA-15` | **P2P Authority Information Access (AIA) & P2P OCSP Engine** | Extends RFC 5280 AIA extension (`1.3.6.1.5.5.7.1.1`) with `randbotd://` P2P swarm URIs for fetching parent CA cert chains (`caIssuers`) and checking real-time P2P revocation status (`id-ad-ocsp`) directly over gossip without central Web server dependencies. | 🔴 |
+| `CA-15` | **P2P Authority Information Access (AIA) \u0026 P2P OCSP Engine** | Extends RFC 5280 AIA extension (`1.3.6.1.5.5.7.1.1`) with `randbotd://` P2P swarm URIs for fetching parent CA cert chains (`caIssuers`) and checking real-time P2P revocation status (`id-ad-ocsp`) directly over gossip without central Web server dependencies. | 🔴 |
 ```
+
+---
+
+## 6. CA-12 Design Reflections & Pre-Implementation Notes
+
+> [!NOTE]
+> This section records architectural decisions and open questions to be resolved **before** implementing CA-12. No code exists for CA-12 yet. These are design commitments that downstream features (`CA-04`, `CA-05`, `CA-07`, `CA-09`, `CA-11`) must not violate.
+
+---
+
+### 6.1 Catalog Storage: Subtable vs. Embedded in `CaDeclaration`
+
+The Offer Catalog (`CAPublishOfferCatalog`) must **not** live inside the main `CaDeclaration` struct. The two should be separate P2P event types with separate storage concerns.
+
+**Rationale:**
+
+| Aspect | Embedded in `CaDeclaration` | Separate `CAPublishOfferCatalog` event |
+| :--- | :--- | :--- |
+| **P2P message size** | A catalog with 3–10 profiles would inflate every CA gossip message by potentially several KB. UDP gossip frames must remain MTU-safe (< 1400 bytes after framing). | Catalog events are emitted independently and cached locally; CA declaration remains compact. |
+| **Update frequency** | CA identity is stable. Pricing and profile parameters change frequently (market adjustments). Coupling them forces re-signing the entire CA identity on every catalog update. | Catalog can be updated and re-signed independently, without touching the CA identity signature. |
+| **Versioning** | A single flat struct has no clean way to track catalog version history or audit pricing changes over time. | Catalog carries its own `catalog_version` monotonic counter and `prev_catalog_hash`, fitting neatly into the anti-entropy event log. |
+| **Indexing** | Querying "all CAs with a free tier" would require deserializing entire CA declarations. | A separate subtable (keyed by `(ca_id, catalog_version)`) allows efficient catalog-only scans without loading CA keypairs. |
+
+**Decision:** `CaDeclaration` stores only the CA identity, keypair reference, custodian type, `supported_domain_networks`, and operational bitmasks. The catalog lives in a separate `ca_catalogs` subtable in the database, indexed by `(ca_id, catalog_version)`. The `CaDeclaration` carries only a `current_catalog_hash: Option<[u8; 32]>` pointer to the latest published catalog, so nodes can verify consistency without fetching the full catalog on every handshake.
+
+---
+
+### 6.2 Immutable vs. Mutable CA Fields
+
+A CA is **tied to a node identity** (the node that created it), but a CA is **not** a node — it is a sovereign P2P entity that can outlive the creating node, migrate custodians (`CA-11`), and rotate keys (`CA-09`). This creates an important distinction between what is permanently fixed at genesis and what can change over the CA lifecycle.
+
+#### Immutable at Genesis (never changes after `CAPublishDeclaration`)
+
+| Field | Reason |
+| :--- | :--- |
+| `ca_id: [u8; 32]` | Derived from the **owner node's P2P identity pubkey** (the node that emits the `CAPublishDeclaration`). It is bound to the node, not to any signing key. A CA cannot be moved to another node, and no other node can emit authoritative CA management events for it. Ownership transfer is not currently implemented. |
+| `owner_node_pubkey: [u8; 32]` | The P2P Ed25519 pubkey of the node that created the CA. All CA management events (`CAPublishOfferCatalog`, `CACapabilityUpdate`, `CustodianContract`, `KeyRotationProof`) must be signed by this key for the network to accept them. |
+| `is_intermediate: bool` | Root vs. Intermediate CA structural role cannot change after issuance. X.509 `Basic Constraints.cA` is a certificate-level attribute frozen at signing time. |
+| `path_len_constraint: Option<u32>` | Baked into the root certificate at genesis. Relaxing this post-issuance would silently extend trust chains — a security violation. |
+| `created_at: u64` | Genesis timestamp. Tampering with this breaks historical audit consistency. |
+
+#### Mutable (can be updated via signed P2P events, owner node signature required)
+
+| Field | Mechanism |
+| :--- | :--- |
+| `subject: CaSubjectMetadata` (display fields: O, OU, email) | Permitted via a signed `CAMetadataUpdate` event. `CN` and `C` should be treated as stable but are technically mutable if the operator opts in. Does **not** affect `ca_id` since that is node-derived. |
+| Operational signing keypair(s) | The cert-signing keys used to issue X.509 certificates are **separate from the owner node key** and are rotatable via `KeyRotationProof` (`CA-09`). See Section 6.4. |
+| `supported_domain_networks` | Updatable as the CA operator adds/removes daemon backends. Emitted as a signed `CACapabilityUpdate` event by the owner node. |
+| `custodian_nodes: Vec<NodePubKey>` | Managed by the threshold swarm state machine (`CA-11`) — worker nodes join and leave via `CustodianContract` / `SwarmActivationConfirmation` / `CustodianRevocation`, all countersigned by the owner node. |
+| `catalog_version` / `CertificateProfile[]` | Updated freely via `CAPublishOfferCatalog` signed by the owner node. The `current_catalog_hash` pointer in `CaDeclaration` is updated accordingly. |
+
+#### Node identity ≠ Signing key
+
+The **node that owns the CA** (identified by `owner_node_pubkey`) is responsible for authorizing all CA state changes. The **operational signing keys** (Ed25519, ECDSA P-384, ML-DSA-44) used to actually sign X.509 certificates are separate from the owner node key. This means:
+
+- The owner node can rotate signing keys without changing `ca_id` or losing CA ownership.
+- Worker nodes in the custodian swarm (`CA-11`) can hold partial signing key shares and co-sign certs, but **cannot** emit CA management events — those are exclusively authorized by `owner_node_pubkey`.
+- Receiving nodes reject any CA management event (catalog update, capability change, domain purge) that is not signed by the `owner_node_pubkey` recorded at genesis, regardless of what signing keys are declared in the catalog.
+
+---
+
+### 6.3 P2P Message Separation: CA Declarations vs. Catalog vs. Cert Offers
+
+This is the most important architectural constraint for `CA-04`, `CA-07`, `CA-09`, and `CA-11`.
+
+**The problem:** The P2P gossip layer (`NET-02`/`NET-04`) uses UDP frames. A realistic MTU ceiling for safe gossip is **~1,200–1,400 bytes** after frame headers, AEAD tag, and Ed25519 signature overhead. A `CaDeclaration` with subject metadata is already ~400–600 bytes. A catalog with 3 profiles containing SAN limits, supported algorithms, price fields, TTL ranges, and proof backend bitmasks easily reaches **2–6 KB**. Broadcasting these as a single UDP message is not feasible.
+
+**Required message type separation:**
+
+```
+P2P Event Type         Approx. Size     Broadcast Frequency
+─────────────────────────────────────────────────────────────
+CAPublishDeclaration   ~400–600 B       Once at genesis + rare identity updates
+CAPublishOfferCatalog  ~1–6 KB          Per pricing/profile update (weekly/monthly)
+CertificateIssuance    ~2–5 KB          Per cert issued (pull, not pushed to all peers)
+KeyRotationProof       ~300–500 B       Per key rotation event (annually)
+CACapabilityUpdate     ~150–300 B       On daemon backend config change
+```
+
+**Consequences for implementation:**
+
+1. **`CAPublishDeclaration`** must remain a compact, self-contained identity beacon. It carries `current_catalog_hash` as a 32-byte pointer only. Nodes receiving a CA declaration who want the full catalog must request it separately via a pull mechanism, or wait for the `CAPublishOfferCatalog` to arrive independently via gossip.
+
+2. **`CAPublishOfferCatalog` (CA-12)** is a separate signed event with its own monotonic `catalog_version` and `prev_catalog_hash` for anti-entropy integrity. Nodes store catalogs in the `ca_catalogs` subtable. The catalog is **not re-gossiped on every peer handshake** — only when a node detects it is missing a catalog version it requires.
+
+3. **`CertificateIssuance` (CA-05)** is a large event and must **never** be bundled with a CA declaration or catalog update in the same UDP frame. Cert events are exchanged via separate gossip round-trips after the domain proof is verified and settled.
+
+4. **Client-facing `GetCert` flow (ACME-03 / CA-04)** therefore follows a staged pull protocol:
+   - **Step 1**: Client receives `CAPublishDeclaration` from gossip (compact, always present in hot-cache).
+   - **Step 2**: Client fetches `CAPublishOfferCatalog` (by `ca_id` + `catalog_hash`) from a peer that holds it. This is a TCP or multi-packet anti-entropy exchange, **not a single UDP message**.
+   - **Step 3**: Client selects a matching profile, performs domain proof, and requests `CertificateIssuance`.
+
+> [!IMPORTANT]
+> Do **not** implement CA-12 as a field on `CaDeclaration`. The subtable + separate event approach is the required design. Any shortcut that embeds catalog data directly in the declaration will silently break UDP gossip MTU safety and create unbounded message sizes as catalog profiles grow.
+
+---
+
+### 6.4 Per-Profile Signing Key Selection: One CA Identity, Multiple Operational Keys
+
+A CA operator may legitimately want to use **different signing algorithms for different catalog profiles**. For example:
+
+- **Free tier (Profile 0)**: Sign issued certs with **Ed25519** — fast, tiny signatures, near-zero compute cost, ideal for high-volume free issuance.
+- **Paid tier (Profile 1)**: Sign issued certs with **ECDSA P-384** — broader browser/system compatibility, NIST-approved for enterprise.
+- **Enterprise / PQ tier (Profile 2)**: Sign with **ML-DSA-44** — post-quantum resistant, preferred by regulated sectors.
+
+This is architecturally valid and mirrors how large CAs already operate (e.g. Let's Encrypt maintains separate RSA and ECDSA intermediate keypairs issuing from the same root).
+
+#### How this maps to `ca_id` and the keystore
+
+The `ca_id` is derived from the **owner node's P2P identity pubkey**, not from any certificate signing key. Adding per-profile operational signing keys does not affect `ca_id`. The operational keys are subordinate to the owner node identity, authorized by a signed `CertificateProfile` entry in the catalog.
+
+```
+Owner Node Pubkey (→ ca_id)
+        │  (all CA management events signed by this key)
+        │
+        ├── Operational Key A: Ed25519      [Free Tier / Profile 0]
+        ├── Operational Key B: ECDSA P-384  [Multi-SAN Tier / Profile 1]
+        └── Operational Key C: ML-DSA-44   [Enterprise PQ Tier / Profile 2]
+```
+
+Each `CertificateProfile` in the catalog carries:
+- `signing_key_algorithm: KeyAlgorithm` — which algorithm is used to sign certs issued under this profile
+- `signing_key_id: [u8; 32]` — fingerprint of the operational key for this profile (allows verifiers to look up the correct public key without fetching the entire keystore)
+
+The CA's local keystore (on the owner node) stores all operational keypairs. Each keypair is encrypted at rest under the CA master password (the same `Argon2id + ChaCha20-Poly1305` scheme used for node keys in `CA-02`).
+
+#### Key authorization chain
+
+When a receiving node validates a cert issued under Profile 1 (ECDSA P-384), it must verify:
+
+1. The cert's signature validates against the **Profile 1 operational key** (ECDSA P-384 pubkey).
+2. The operational key's `signing_key_id` matches the fingerprint declared in the **`CertificateProfile`** entry in the catalog.
+3. The catalog is signed by the **owner node's P2P key** (which is the source of `ca_id`).
+4. The `ca_id` in the catalog matches the `ca_id` of the issuing CA in the cert's Issuer DN.
+
+This chain — `cert signature → operational key → catalog profile → owner node signature → ca_id` — ensures the operational signing key was legitimately authorized by the CA's owner node, even if it uses a completely different algorithm.
+
+#### Consequences for `CA-09` key rotation
+
+Key rotation (`CA-09`) applies **per operational signing key**, not to the owner node key. A CA can rotate its Ed25519 cert-signing key (for the free tier) independently of its ECDSA P-384 key (for the paid tier). Each rotation emits a `KeyRotationProof` scoped to a specific `signing_key_id`, countersigned by the owner node.
+
+The owner node key itself is **not rotatable without dissolving the CA** — it is the identity anchor from which `ca_id` is derived. If the owner node key is compromised, the CA must be considered compromised. Ownership transfer to another node is a future concern and not currently implemented.
+
+> [!NOTE]
+> The `key_algorithm` field currently on `CaDeclaration` refers to the **first operational cert-signing key algorithm** chosen at genesis. Per-profile signing key algorithms will belong on `CertificateProfile` when CA-12 is implemented. `CaDeclaration.key_algorithm` must not be conflated with the owner node key algorithm (which is always the node's P2P Ed25519 identity key).
 
 ---
