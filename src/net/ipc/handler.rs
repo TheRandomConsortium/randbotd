@@ -241,9 +241,18 @@ fn handle_challenge_domain_proof(
         };
     }
 
-    let net_type =
-        network_type.unwrap_or_else(|| DomainNetworkType::classify_domain(&domain_clean));
     let daemon_cfg = DaemonConfig::load_default_or_create(None);
+    let net_type = match network_type {
+        Some(nt) => nt,
+        None => match DomainNetworkType::resolve_network_type(&domain_clean, &daemon_cfg) {
+            Ok(nt) => nt,
+            Err(e) => {
+                return IpcResponse::Error {
+                    reason: e.to_string(),
+                }
+            }
+        },
+    };
 
     if let Err(e) = DomainProofVerifier::check_backend_capability(net_type, &daemon_cfg) {
         return IpcResponse::Error {
@@ -325,12 +334,25 @@ fn handle_verify_domain_proof(
             },
         }
     } else {
-        let err = DomainProofVerifier::fail_unresolvable_domain(
-            &challenge.domain,
-            "No DNS TXT record or HTTP Nonce payload supplied for verification",
-        );
-        IpcResponse::Error {
-            reason: err.to_string(),
+        let daemon_cfg = DaemonConfig::load_default_or_create(None);
+        match DomainProofVerifier::verify_active_domain_control(&challenge, &daemon_cfg) {
+            Ok(resp) => IpcResponse::Ok {
+                message: format!(
+                    "Live network domain proof verified successfully for `{}` via {:?} (node pubkey: {})",
+                    resp.domain,
+                    resp.proof_method,
+                    hex::encode(resp.node_pubkey)
+                ),
+            },
+            Err(e) => {
+                let err = DomainProofVerifier::fail_unresolvable_domain(
+                    &challenge.domain,
+                    &e.to_string(),
+                );
+                IpcResponse::Error {
+                    reason: err.to_string(),
+                }
+            }
         }
     }
 }

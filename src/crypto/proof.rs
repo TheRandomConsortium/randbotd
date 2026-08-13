@@ -1,6 +1,7 @@
 //! CA-03 Multi-Network Domain Proofs Engine
 //! Exposes domain proof classification, challenges, Ed25519 signature verification,
-//! DNS TXT / HTTP Nonce verifiers, and network capability routing for ACME integration.
+//! active REAL DNS network resolution (Upstream Clearnet -> Handshake daemon -> Error),
+//! HTTP Nonce fetching (Tor/I2P proxy), and network capability routing.
 
 use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
 use crate::crypto::identity::NodeIdentity;
+use crate::crypto::proof_net::{
+    check_dns_resolves, fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json,
+    send_udp_dns_txt_query,
+};
 
 /// Supported domain network ecosystems in randbotd
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -23,25 +28,44 @@ pub enum DomainNetworkType {
 impl DomainNetworkType {
     pub fn name(&self) -> &'static str {
         match self {
-            DomainNetworkType::Clearnet => "Clearnet (ICANN DNS)",
-            DomainNetworkType::Handshake => "Handshake (.hns / Custom HNS Root TLD)",
+            DomainNetworkType::Clearnet => "Clearnet (ICANN Upstream DNS)",
+            DomainNetworkType::Handshake => "Handshake (Arbitrary Root TLDs)",
             DomainNetworkType::Tor => "Tor Hidden Service (.onion)",
             DomainNetworkType::I2P => "I2P Eepsite (.i2p)",
         }
     }
 
-    /// Classifies domain network by TLD suffix
-    pub fn classify_domain(domain: &str) -> Self {
+    pub fn resolve_network_type(domain: &str, config: &DaemonConfig) -> Result<Self, ProofError> {
         let clean = domain.trim().to_lowercase();
         if clean.ends_with(".onion") {
-            DomainNetworkType::Tor
-        } else if clean.ends_with(".i2p") {
-            DomainNetworkType::I2P
-        } else if clean.ends_with(".hns") {
-            DomainNetworkType::Handshake
-        } else {
-            DomainNetworkType::Clearnet
+            return Ok(DomainNetworkType::Tor);
         }
+        if clean.ends_with(".i2p") {
+            return Ok(DomainNetworkType::I2P);
+        }
+
+        let upstream_resolver = config
+            .handshake
+            .upstream_dns_resolver
+            .as_deref()
+            .unwrap_or("9.9.9.9:53");
+
+        if check_dns_resolves(&clean, upstream_resolver) {
+            return Ok(DomainNetworkType::Clearnet);
+        }
+
+        if config.has_hns_support() {
+            let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
+            let hns_addr = format!("127.0.0.1:{}", hns_port);
+            if check_dns_resolves(&clean, &hns_addr) {
+                return Ok(DomainNetworkType::Handshake);
+            }
+        }
+
+        Err(ProofError::UnresolvableDomain(format!(
+            "Domain `{}` could not be resolved on Upstream Clearnet DNS ({}) nor Handshake DNS daemon. Domain is unresolvable or unsupported.",
+            clean, upstream_resolver
+        )))
     }
 }
 
@@ -98,7 +122,6 @@ pub struct DomainProofChallenge {
 }
 
 impl DomainProofChallenge {
-    /// Creates a new domain proof challenge with custom TTL (seconds)
     pub fn new(domain: &str, network_type: DomainNetworkType, ttl_seconds: u64) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -225,7 +248,7 @@ impl DomainProofResponse {
     }
 }
 
-/// Multi-network domain proof verifier & backend capability manager
+/// Multi-network domain proof verifier & active resolver manager
 pub struct DomainProofVerifier;
 
 impl DomainProofVerifier {
@@ -270,109 +293,83 @@ impl DomainProofVerifier {
         txt_val: &str,
         challenge: &DomainProofChallenge,
     ) -> Result<DomainProofResponse, ProofError> {
-        let clean = txt_val.trim();
-        let payload = clean.strip_prefix("randbotd-proof=").ok_or_else(|| {
-            ProofError::InvalidSignature(
-                "DNS TXT record missing `randbotd-proof=` prefix".to_string(),
-            )
-        })?;
-
-        let parts: Vec<&str> = payload.split(':').collect();
-        if parts.len() != 3 {
-            return Err(ProofError::InvalidSignature(
-                "DNS TXT payload must contain 3 colon-separated fields".to_string(),
-            ));
-        }
-
-        let nonce_bytes = hex::decode(parts[0])
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid nonce hex: {}", e)))?;
-        if nonce_bytes != challenge.nonce {
-            return Err(ProofError::InvalidSignature(
-                "Nonce does not match challenge".to_string(),
-            ));
-        }
-
-        let pubkey_bytes = hex::decode(parts[1])
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid pubkey hex: {}", e)))?;
-        if pubkey_bytes.len() != 32 {
-            return Err(ProofError::InvalidSignature(
-                "Ed25519 pubkey length must be 32 bytes".to_string(),
-            ));
-        }
-
-        let sig_bytes = hex::decode(parts[2])
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid signature hex: {}", e)))?;
-        if sig_bytes.len() != 64 {
-            return Err(ProofError::InvalidSignature(
-                "Ed25519 signature length must be 64 bytes".to_string(),
-            ));
-        }
-
-        let mut node_pubkey = [0u8; 32];
-        node_pubkey.copy_from_slice(&pubkey_bytes);
-
-        let response = DomainProofResponse {
-            challenge_id: challenge.challenge_id.clone(),
-            domain: challenge.domain.clone(),
-            node_pubkey,
-            signature: sig_bytes,
-            proof_method: DomainProofMethod::DnsTxt,
-        };
-
-        response.verify_signature(challenge)?;
-        Ok(response)
+        parse_dns_txt_record(txt_val, challenge)
     }
 
     pub fn parse_http_nonce_json(
         json_str: &str,
         challenge: &DomainProofChallenge,
     ) -> Result<DomainProofResponse, ProofError> {
-        #[derive(Deserialize)]
-        struct HttpProofPayload {
-            challenge_id: String,
-            domain: String,
-            node_pubkey: String,
-            signature: String,
+        parse_http_nonce_json(json_str, challenge)
+    }
+
+    /// Performs active live network resolution and domain proof verification:
+    /// 1. `.onion` => Tor SOCKS proxy HTTP Nonce
+    /// 2. `.i2p` => I2P HTTP proxy HTTP Nonce
+    /// 3. Checks Upstream Clearnet DNS (Quad9 9.9.9.9:53) FOR REAL -> Clearnet
+    /// 4. Checks Handshake DNS daemon (127.0.0.1:53493) FOR REAL -> Handshake
+    /// 5. Tries HTTP Nonce Fallback
+    /// 6. If all fail => Returns ProofError::UnresolvableDomain
+    pub fn verify_active_domain_control(
+        challenge: &DomainProofChallenge,
+        config: &DaemonConfig,
+    ) -> Result<DomainProofResponse, ProofError> {
+        let domain = &challenge.domain;
+
+        let detected_net = DomainNetworkType::resolve_network_type(domain, config)?;
+
+        Self::check_backend_capability(detected_net, config)?;
+
+        match detected_net {
+            DomainNetworkType::Tor => fetch_http_nonce(domain, DomainNetworkType::Tor, config)
+                .map_err(ProofError::UnresolvableDomain)
+                .and_then(|json| Self::parse_http_nonce_json(&json, challenge)),
+            DomainNetworkType::I2P => fetch_http_nonce(domain, DomainNetworkType::I2P, config)
+                .map_err(ProofError::UnresolvableDomain)
+                .and_then(|json| Self::parse_http_nonce_json(&json, challenge)),
+            DomainNetworkType::Clearnet => {
+                let upstream_resolver = config
+                    .handshake
+                    .upstream_dns_resolver
+                    .as_deref()
+                    .unwrap_or("9.9.9.9:53");
+                if let Ok(records) = send_udp_dns_txt_query(domain, upstream_resolver) {
+                    for rec in records {
+                        if rec.contains("randbotd-proof=") {
+                            if let Ok(resp) = Self::parse_dns_txt_record(&rec, challenge) {
+                                return Ok(resp);
+                            }
+                        }
+                    }
+                }
+
+                fetch_http_nonce(domain, DomainNetworkType::Clearnet, config)
+                    .map_err(ProofError::UnresolvableDomain)
+                    .and_then(|json| Self::parse_http_nonce_json(&json, challenge))
+            }
+            DomainNetworkType::Handshake => {
+                let hns_port = config.handshake.hns_dns_port.unwrap_or(53493);
+                let hns_addr = format!("127.0.0.1:{}", hns_port);
+                if let Ok(records) = send_udp_dns_txt_query(domain, &hns_addr) {
+                    for rec in records {
+                        if rec.contains("randbotd-proof=") {
+                            if let Ok(resp) = Self::parse_dns_txt_record(&rec, challenge) {
+                                return Ok(resp);
+                            }
+                        }
+                    }
+                }
+
+                fetch_http_nonce(domain, DomainNetworkType::Handshake, config)
+                    .map_err(ProofError::UnresolvableDomain)
+                    .and_then(|json| Self::parse_http_nonce_json(&json, challenge))
+            }
         }
-
-        let payload: HttpProofPayload = serde_json::from_str(json_str).map_err(|e| {
-            ProofError::InvalidSignature(format!("Invalid HTTP Nonce JSON payload: {}", e))
-        })?;
-
-        let pubkey_bytes = hex::decode(&payload.node_pubkey)
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid node_pubkey hex: {}", e)))?;
-        if pubkey_bytes.len() != 32 {
-            return Err(ProofError::InvalidSignature(
-                "Ed25519 pubkey length must be 32 bytes".to_string(),
-            ));
-        }
-
-        let sig_bytes = hex::decode(&payload.signature)
-            .map_err(|e| ProofError::InvalidSignature(format!("Invalid signature hex: {}", e)))?;
-        if sig_bytes.len() != 64 {
-            return Err(ProofError::InvalidSignature(
-                "Ed25519 signature length must be 64 bytes".to_string(),
-            ));
-        }
-
-        let mut node_pubkey = [0u8; 32];
-        node_pubkey.copy_from_slice(&pubkey_bytes);
-
-        let response = DomainProofResponse {
-            challenge_id: payload.challenge_id,
-            domain: payload.domain,
-            node_pubkey,
-            signature: sig_bytes,
-            proof_method: DomainProofMethod::HttpNonceFallback,
-        };
-
-        response.verify_signature(challenge)?;
-        Ok(response)
     }
 
     pub fn fail_unresolvable_domain(domain: &str, details: &str) -> ProofError {
         ProofError::UnresolvableDomain(format!(
-            "Failed to resolve domain `{}` across DNS, Handshake, and HTTP fallback: {}",
+            "Failed to resolve domain `{}` across Upstream Clearnet DNS, Handshake DNS, and HTTP fallback: {}",
             domain, details
         ))
     }
@@ -384,22 +381,15 @@ mod tests {
     use crate::crypto::identity::{NodeIdentity, NodeRole};
 
     #[test]
-    fn test_domain_network_type_classification() {
+    fn test_domain_network_type_resolution() {
+        let cfg = DaemonConfig::default();
         assert_eq!(
-            DomainNetworkType::classify_domain("example.onion"),
+            DomainNetworkType::resolve_network_type("example.onion", &cfg).unwrap(),
             DomainNetworkType::Tor
         );
         assert_eq!(
-            DomainNetworkType::classify_domain("site.i2p"),
+            DomainNetworkType::resolve_network_type("site.i2p", &cfg).unwrap(),
             DomainNetworkType::I2P
-        );
-        assert_eq!(
-            DomainNetworkType::classify_domain("crypto.hns"),
-            DomainNetworkType::Handshake
-        );
-        assert_eq!(
-            DomainNetworkType::classify_domain("therandomconsortium.org"),
-            DomainNetworkType::Clearnet
         );
     }
 
@@ -435,20 +425,18 @@ mod tests {
             identity.verifying_key().to_bytes()
         );
     }
-
     #[test]
     fn test_proof_error_unresolvable_domain_construction() {
-        let err =
-            DomainProofVerifier::fail_unresolvable_domain("nonexistent.hns", "NXDOMAIN from hnsd");
+        let err = DomainProofVerifier::fail_unresolvable_domain("nonexistent.randºm", "NXDOMAIN");
         assert!(matches!(err, ProofError::UnresolvableDomain(_)));
-        assert!(err.to_string().contains("nonexistent.hns"));
+        assert!(err.to_string().contains("nonexistent.randºm"));
     }
 
     #[test]
     fn test_http_nonce_json_parsing_and_verification() {
-        let seed = [2u8; 32];
-        let identity = NodeIdentity::from_seed_and_role(&seed, NodeRole::Voter);
-        let challenge = DomainProofChallenge::new("myname.hns", DomainNetworkType::Handshake, 900);
+        let identity = NodeIdentity::from_seed_and_role(&[2u8; 32], NodeRole::Voter);
+        let challenge =
+            DomainProofChallenge::new("mreugenej7.randºm", DomainNetworkType::Clearnet, 900);
         let response = DomainProofResponse::create_signed(
             &challenge,
             &identity,
@@ -463,8 +451,7 @@ mod tests {
         })
         .to_string();
 
-        let parsed = DomainProofVerifier::parse_http_nonce_json(&json_payload, &challenge);
-        assert!(parsed.is_ok());
+        assert!(DomainProofVerifier::parse_http_nonce_json(&json_payload, &challenge).is_ok());
     }
 
     #[test]
