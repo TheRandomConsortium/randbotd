@@ -31,6 +31,8 @@ pub enum IpcCommand {
         key_algorithm: Option<crate::crypto::agility::KeyAlgorithm>,
         #[serde(default)]
         supported_domain_networks: Option<Vec<crate::crypto::proof::DomainNetworkType>>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
     },
     ChallengeDomainProof {
         domain: String,
@@ -228,6 +230,7 @@ mod tests {
             supported_domain_networks: Some(vec![
                 crate::crypto::proof::DomainNetworkType::Clearnet,
             ]),
+            ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -290,6 +293,7 @@ mod tests {
             supported_domain_networks: Some(vec![
                 crate::crypto::proof::DomainNetworkType::Clearnet,
             ]),
+            ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&draft_cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -331,6 +335,7 @@ mod tests {
             supported_domain_networks: Some(vec![
                 crate::crypto::proof::DomainNetworkType::Clearnet,
             ]),
+            ttl_seconds: None,
         };
         let edit_line = serde_json::to_string(&edit_cmd).unwrap() + "\n";
         writer2.write_all(edit_line.as_bytes()).await.unwrap();
@@ -390,6 +395,7 @@ mod tests {
             supported_domain_networks: Some(vec![
                 crate::crypto::proof::DomainNetworkType::Clearnet,
             ]),
+            ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
         writer.write_all(cmd_line.as_bytes()).await.unwrap();
@@ -412,6 +418,65 @@ mod tests {
             cas[0].key_algorithm,
             crate::crypto::agility::KeyAlgorithm::MlDsa44
         );
+
+        handle.abort();
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_ipc_publish_ca_with_custom_ttl() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("randbotd_ipc_ttl_test_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let socket_path = temp_dir.join("randbotd.sock");
+
+        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
+        let db = Arc::new(Database::open(&temp_dir).unwrap());
+        let server =
+            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+        let handle = server.spawn();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let stream = UnixStream::connect(&socket_path).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+
+        let cmd = IpcCommand::PublishCa {
+            ca_id_hex: None,
+            common_name: "Ephemeral Micro-TTL CA".to_string(),
+            organization: Some("The Random Consortium".to_string()),
+            organizational_unit: None,
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+            is_intermediate: false,
+            path_len_constraint: None,
+            is_draft: None,
+            key_algorithm: None,
+            supported_domain_networks: Some(vec![
+                crate::crypto::proof::DomainNetworkType::Clearnet,
+            ]),
+            ttl_seconds: Some(1800), // 30 minutes
+        };
+        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
+        writer.write_all(cmd_line.as_bytes()).await.unwrap();
+
+        let mut buf_reader = BufReader::new(reader);
+        let mut resp_line = String::new();
+        buf_reader.read_line(&mut resp_line).await.unwrap();
+
+        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
+        match resp {
+            IpcResponse::Ok { message } => {
+                assert!(message.contains("successfully published"));
+            }
+            _ => panic!("Expected Ok response, got {:?}", resp),
+        }
+
+        let cas = db.list_cas();
+        assert_eq!(cas.len(), 1);
+        assert_eq!(cas[0].ttl_seconds, 1800);
 
         handle.abort();
         let _ = std::fs::remove_dir_all(temp_dir);

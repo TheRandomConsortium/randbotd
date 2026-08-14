@@ -1353,13 +1353,14 @@ dependencies = [
 
 [[package]]
 name = "randbotd"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
  "clap",
  "ed25519-dalek",
  "hex",
+ "idna",
  "igd",
  "p384",
  "pqcrypto-dilithium",

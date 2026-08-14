@@ -78,7 +78,6 @@ impl HandshakeConfig {
     pub fn is_doh_mode(&self) -> bool {
         matches!(self.hns_dns_mode.as_deref(), Some("doh") | Some("https"))
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -203,7 +202,6 @@ upstream_dns_resolver = "9.9.9.9:53"
         let mut hns = HandshakeConfig::default();
         assert_eq!(hns.resolve_target_addr(), "127.0.0.1:53493");
         assert!(!hns.is_doh_mode());
-
 
         hns.hns_dns_target = Some("system".to_string());
         assert_eq!(hns.resolve_target_addr(), "system");

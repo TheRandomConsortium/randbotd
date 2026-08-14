@@ -2,15 +2,27 @@
 
 use crate::config::DaemonConfig;
 
-/// Builds binary wire-format DNS query packet payload
+/// Normalizes a single DNS label to ASCII Punycode (RFC 3492 / RFC 5891) if it contains non-ASCII characters.
+pub fn normalize_dns_label_to_ascii(label: &str) -> String {
+    if label.is_ascii() {
+        label.to_string()
+    } else if let Some(encoded) = idna::punycode::encode_str(label) {
+        format!("xn--{}", encoded)
+    } else {
+        label.to_string()
+    }
+}
+
+/// Builds binary wire-format DNS query packet payload with Punycode IDN normalization
 pub fn build_dns_query_packet(qname: &str, qtype: u16) -> Vec<u8> {
     let mut query = vec![
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
     for label in qname.trim_matches('.').split('.') {
-        if !label.is_empty() && label.len() <= 63 {
-            query.push(label.len() as u8);
-            query.extend_from_slice(label.as_bytes());
+        let ascii_label = normalize_dns_label_to_ascii(label);
+        if !ascii_label.is_empty() && ascii_label.len() <= 63 {
+            query.push(ascii_label.len() as u8);
+            query.extend_from_slice(ascii_label.as_bytes());
         }
     }
     query.push(0x00);
@@ -234,4 +246,32 @@ pub fn send_dns_txt_query_config(
 
 pub fn send_udp_dns_txt_query(domain: &str, resolver_addr: &str) -> Result<Vec<String>, String> {
     send_dns_txt_query_config(domain, resolver_addr, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_dns_label_to_ascii_punycode() {
+        assert_eq!(normalize_dns_label_to_ascii("example"), "example");
+        assert_eq!(
+            normalize_dns_label_to_ascii("_randbotd-challenge"),
+            "_randbotd-challenge"
+        );
+        // IDN label "randºm" containing 'º' (U+00BA) normalized to "xn--randm-cka"
+        assert_eq!(normalize_dns_label_to_ascii("randºm"), "xn--randm-cka");
+    }
+
+    #[test]
+    fn test_build_dns_query_packet_with_idn() {
+        let packet = build_dns_query_packet("randºm", 1);
+        // Label len should be 13 for "xn--randm-cka"
+        assert_eq!(packet[12], 13);
+        assert_eq!(&packet[13..26], b"xn--randm-cka");
+
+        let challenge_packet = build_dns_query_packet("_randbotd-challenge.randºm", 16);
+        let challenge_label_len = "_randbotd-challenge".len() as u8;
+        assert_eq!(challenge_packet[12], challenge_label_len);
+    }
 }

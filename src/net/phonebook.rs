@@ -32,6 +32,8 @@ pub struct Phonebook {
     pub file_path: Option<std::path::PathBuf>,
     #[serde(skip)]
     pub my_pubkey_hex: Option<String>,
+    #[serde(skip)]
+    pub my_pubkey: Option<[u8; 32]>,
 }
 
 impl Phonebook {
@@ -41,11 +43,17 @@ impl Phonebook {
             pending_dial_peers: Vec::new(),
             file_path: None,
             my_pubkey_hex: None,
+            my_pubkey: None,
         }
     }
 
     pub fn set_my_pubkey(&mut self, pubkey: &[u8; 32]) {
+        self.my_pubkey = Some(*pubkey);
         self.my_pubkey_hex = Some(hex_encode(pubkey));
+    }
+
+    pub fn my_pubkey_bytes(&self) -> Option<[u8; 32]> {
+        self.my_pubkey
     }
 
     pub fn load_from_file(path: &Path) -> io::Result<Self> {

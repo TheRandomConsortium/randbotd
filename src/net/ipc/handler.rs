@@ -42,6 +42,7 @@ pub fn handle_ipc_command(
             is_draft,
             key_algorithm,
             supported_domain_networks,
+            ttl_seconds,
         } => handle_publish_ca(
             ca_id_hex,
             common_name,
@@ -56,6 +57,8 @@ pub fn handle_ipc_command(
             is_draft,
             key_algorithm,
             supported_domain_networks,
+            ttl_seconds,
+            phonebook,
             db,
         ),
         IpcCommand::ChallengeDomainProof {
@@ -100,6 +103,8 @@ fn handle_publish_ca(
     is_draft: Option<bool>,
     key_algorithm: Option<KeyAlgorithm>,
     supported_domain_networks: Option<Vec<DomainNetworkType>>,
+    ttl_seconds: Option<u64>,
+    phonebook: &Arc<RwLock<Phonebook>>,
     db: Option<&Arc<Database>>,
 ) -> IpcResponse {
     let subject = CaSubjectMetadata {
@@ -121,13 +126,19 @@ fn handle_publish_ca(
         .unwrap_or_default()
         .as_secs();
 
+    let node_pubkey = phonebook
+        .read()
+        .unwrap()
+        .my_pubkey_bytes()
+        .unwrap_or([0u8; 32]);
+
     let ca_id = if let Some(ref hex_str) = ca_id_hex {
         match crate::storage::db::ca_subtable::hex_to_bytes32(hex_str) {
             Ok(bytes) => bytes,
-            Err(_) => compute_ca_id(subject.common_name.as_bytes()),
+            Err(_) => compute_ca_id(&subject.common_name, &node_pubkey),
         }
     } else {
-        compute_ca_id(subject.common_name.as_bytes())
+        compute_ca_id(&subject.common_name, &node_pubkey)
     };
 
     let is_draft_val = is_draft.unwrap_or(false);
@@ -161,9 +172,12 @@ fn handle_publish_ca(
         }
     };
 
+    let ttl_val = ttl_seconds.unwrap_or(crate::crypto::ca::DEFAULT_CA_TTL_SECONDS);
+
     let decl_res = if !is_draft_val
         && keypair.algorithm == KeyAlgorithm::Ed25519
         && networks == vec![DomainNetworkType::Clearnet]
+        && ttl_val == crate::crypto::ca::DEFAULT_CA_TTL_SECONDS
     {
         CaDeclaration::new(
             ca_id,
@@ -184,6 +198,7 @@ fn handle_publish_ca(
             is_draft_val,
             keypair.algorithm,
             networks,
+            ttl_val,
         )
     };
 
@@ -194,6 +209,7 @@ fn handle_publish_ca(
             if let Err(err) = decl.validate_against_config(&daemon_cfg) {
                 return IpcResponse::Error { reason: err };
             }
+            let _ = decl.validity_window(created_at);
 
             let ca_id_hex_res = ca_id
                 .iter()

@@ -122,7 +122,10 @@ async fn main() {
     };
 
     println!("================================================================================");
-    println!("  🛡️ Random Consortium Certificate Bot Daemon (randbotd) v0.3.0");
+    println!(
+        "  🛡️ Random Consortium Certificate Bot Daemon (randbotd) v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     println!(
         "  [Mode: {} | Seed Mode: {} | P2P Port: {}]",
         args.mode, seed_mode, port

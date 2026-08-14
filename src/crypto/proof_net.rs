@@ -1,11 +1,11 @@
 //! HTTP Nonce proofing, DNS TXT parsing, and proof response helper module
 
 use crate::config::DaemonConfig;
+use crate::crypto::dns::resolve_hns_ip;
 use crate::crypto::identity::NodeIdentity;
 use crate::crypto::proof::{
     DomainNetworkType, DomainProofChallenge, DomainProofMethod, ProofError,
 };
-use crate::crypto::dns::resolve_hns_ip;
 
 use ed25519_dalek::Signer;
 use serde::{Deserialize, Serialize};

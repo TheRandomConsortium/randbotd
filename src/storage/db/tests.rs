@@ -355,7 +355,7 @@ fn test_db_ca_subtable_persistence() {
         email: Some("root@consortium.rand".to_string()),
     };
 
-    let ca_id = compute_ca_id(b"root_key_bytes");
+    let ca_id = compute_ca_id(&subject.common_name, b"root_key_bytes");
     let decl = CaDeclaration::new(
         ca_id,
         subject.clone(),
