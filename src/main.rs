@@ -7,6 +7,8 @@ mod cli;
 mod config;
 mod crypto;
 mod net;
+mod pki;
+mod proof;
 mod storage;
 
 use cli::Cli;

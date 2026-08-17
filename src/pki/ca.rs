@@ -1,12 +1,30 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::config::DaemonConfig;
+use crate::crypto::agility::KeyAlgorithm;
+use crate::proof::DomainNetworkType;
+
 /// Maximum field length constraints per RFC 5280 / ITU-T X.520
 pub const MAX_CN_LENGTH: usize = 64;
 pub const MAX_O_LENGTH: usize = 64;
 pub const MAX_OU_LENGTH: usize = 64;
 pub const MAX_LOCALITY_LENGTH: usize = 128;
 pub const MAX_STATE_LENGTH: usize = 128;
+
+pub const DEFAULT_CA_TTL_SECONDS: u64 = 7_776_000; // 90 days
+
+fn default_key_algorithm() -> KeyAlgorithm {
+    KeyAlgorithm::Ed25519
+}
+
+fn default_supported_domain_networks() -> Vec<DomainNetworkType> {
+    vec![DomainNetworkType::Clearnet]
+}
+
+fn default_ttl_seconds() -> u64 {
+    DEFAULT_CA_TTL_SECONDS
+}
 
 /// Standard X.509 Distinguished Name (DN) subject and issuer metadata
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,24 +115,6 @@ impl CaSubjectMetadata {
 
         Ok(())
     }
-}
-
-use crate::config::DaemonConfig;
-use crate::crypto::agility::KeyAlgorithm;
-use crate::crypto::proof::DomainNetworkType;
-
-pub const DEFAULT_CA_TTL_SECONDS: u64 = 7_776_000; // 90 days
-
-fn default_key_algorithm() -> KeyAlgorithm {
-    KeyAlgorithm::Ed25519
-}
-
-fn default_supported_domain_networks() -> Vec<DomainNetworkType> {
-    vec![DomainNetworkType::Clearnet]
-}
-
-fn default_ttl_seconds() -> u64 {
-    DEFAULT_CA_TTL_SECONDS
 }
 
 /// Declaration payload for a Root or Intermediate Certificate Authority (CA)

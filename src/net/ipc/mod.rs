@@ -30,14 +30,14 @@ pub enum IpcCommand {
         #[serde(default)]
         key_algorithm: Option<crate::crypto::agility::KeyAlgorithm>,
         #[serde(default)]
-        supported_domain_networks: Option<Vec<crate::crypto::proof::DomainNetworkType>>,
+        supported_domain_networks: Option<Vec<crate::proof::DomainNetworkType>>,
         #[serde(default)]
         ttl_seconds: Option<u64>,
     },
     ChallengeDomainProof {
         domain: String,
         #[serde(default)]
-        network_type: Option<crate::crypto::proof::DomainNetworkType>,
+        network_type: Option<crate::proof::DomainNetworkType>,
         #[serde(default)]
         ttl_seconds: Option<u64>,
     },
@@ -227,9 +227,7 @@ mod tests {
             path_len_constraint: None,
             is_draft: None,
             key_algorithm: None,
-            supported_domain_networks: Some(vec![
-                crate::crypto::proof::DomainNetworkType::Clearnet,
-            ]),
+            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
             ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
@@ -290,9 +288,7 @@ mod tests {
             path_len_constraint: None,
             is_draft: Some(true),
             key_algorithm: None,
-            supported_domain_networks: Some(vec![
-                crate::crypto::proof::DomainNetworkType::Clearnet,
-            ]),
+            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
             ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&draft_cmd).unwrap() + "\n";
@@ -332,9 +328,7 @@ mod tests {
             path_len_constraint: None,
             is_draft: Some(false),
             key_algorithm: None,
-            supported_domain_networks: Some(vec![
-                crate::crypto::proof::DomainNetworkType::Clearnet,
-            ]),
+            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
             ttl_seconds: None,
         };
         let edit_line = serde_json::to_string(&edit_cmd).unwrap() + "\n";
@@ -392,9 +386,7 @@ mod tests {
             path_len_constraint: None,
             is_draft: None,
             key_algorithm: Some(crate::crypto::agility::KeyAlgorithm::MlDsa44),
-            supported_domain_networks: Some(vec![
-                crate::crypto::proof::DomainNetworkType::Clearnet,
-            ]),
+            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
             ttl_seconds: None,
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
@@ -454,9 +446,7 @@ mod tests {
             path_len_constraint: None,
             is_draft: None,
             key_algorithm: None,
-            supported_domain_networks: Some(vec![
-                crate::crypto::proof::DomainNetworkType::Clearnet,
-            ]),
+            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
             ttl_seconds: Some(1800), // 30 minutes
         };
         let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";

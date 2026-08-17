@@ -339,7 +339,7 @@ fn test_database_equivocation_truth_resolution() {
 
 #[test]
 fn test_db_ca_subtable_persistence() {
-    use crate::crypto::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+    use crate::pki::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
 
     let temp_dir =
         std::env::temp_dir().join(format!("randbotd_ca_db_test_{}", rand::random::<u64>()));

@@ -1,11 +1,11 @@
 use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
-use crate::crypto::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
-use crate::crypto::proof::{
-    DomainNetworkType, DomainProofChallenge, DomainProofResponse, DomainProofVerifier,
-};
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
+use crate::pki::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+use crate::proof::{
+    DomainNetworkType, DomainProofChallenge, DomainProofResponse, DomainProofVerifier,
+};
 use crate::storage::db::Database;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -172,12 +172,12 @@ fn handle_publish_ca(
         }
     };
 
-    let ttl_val = ttl_seconds.unwrap_or(crate::crypto::ca::DEFAULT_CA_TTL_SECONDS);
+    let ttl_val = ttl_seconds.unwrap_or(crate::pki::ca::DEFAULT_CA_TTL_SECONDS);
 
     let decl_res = if !is_draft_val
         && keypair.algorithm == KeyAlgorithm::Ed25519
         && networks == vec![DomainNetworkType::Clearnet]
-        && ttl_val == crate::crypto::ca::DEFAULT_CA_TTL_SECONDS
+        && ttl_val == crate::pki::ca::DEFAULT_CA_TTL_SECONDS
     {
         CaDeclaration::new(
             ca_id,
@@ -230,6 +230,8 @@ fn handle_publish_ca(
                 let _ = database.get_ca(&ca_id);
                 let _ = database.list_cas();
             }
+
+            eprintln!("  ℹ️ {}", crate::pki::cert::wot_extension_warning());
 
             IpcResponse::Ok {
                 message: format!(
@@ -286,7 +288,7 @@ fn handle_challenge_domain_proof(
     let sample_resp = DomainProofResponse::create_signed(
         &challenge,
         &sample_id,
-        crate::crypto::proof::DomainProofMethod::DnsTxt,
+        crate::proof::DomainProofMethod::DnsTxt,
     );
     let _ = sample_resp.to_dns_txt_record(&challenge.nonce);
 
@@ -340,7 +342,7 @@ fn handle_verify_domain_proof(
         match DomainProofVerifier::parse_http_nonce_json(
             &json_val,
             &challenge,
-            crate::crypto::proof::DomainProofMethod::HttpNonceFallback,
+            crate::proof::DomainProofMethod::HttpNonceFallback,
         ) {
             Ok(resp) => IpcResponse::Ok {
                 message: format!(

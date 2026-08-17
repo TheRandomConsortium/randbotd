@@ -27,7 +27,7 @@ pub struct Database {
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
     merkle_cache: MerkleCacheMap,
-    ca_store: RwLock<std::collections::HashMap<[u8; 32], crate::crypto::ca::CaDeclaration>>,
+    ca_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::ca::CaDeclaration>>,
 }
 
 #[allow(dead_code)]
@@ -83,11 +83,11 @@ impl Database {
             0
         };
 
-        let loaded_cas: std::collections::HashMap<[u8; 32], crate::crypto::ca::CaDeclaration> =
+        let loaded_cas: std::collections::HashMap<[u8; 32], crate::pki::ca::CaDeclaration> =
             if ca_file_path.exists() {
                 let content = std::fs::read_to_string(&ca_file_path)
                     .map_err(|e| format!("Failed to read ca_declarations file: {}", e))?;
-                let hex_map: std::collections::HashMap<String, crate::crypto::ca::CaDeclaration> =
+                let hex_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> =
                     serde_json::from_str(&content).unwrap_or_default();
                 let mut map = std::collections::HashMap::new();
                 for (hex_key, decl) in hex_map {

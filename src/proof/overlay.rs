@@ -1,7 +1,7 @@
 //! Tor Hidden Service TLS ALPN and I2P SAM v3.0 Bridge overlay network transport helpers
 
 use crate::config::DaemonConfig;
-use crate::crypto::proof::DomainNetworkType;
+use crate::proof::engine::DomainNetworkType;
 use rustls::client::ServerCertVerifier;
 use rustls::{Certificate, ClientConfig, ClientConnection, OwnedTrustAnchor, ServerName, Stream};
 use std::io::{Read, Write};

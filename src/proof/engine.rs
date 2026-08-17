@@ -10,14 +10,14 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
-use crate::crypto::dns::{
+use crate::proof::dns::{
     check_dns_resolves, check_dns_resolves_config, send_dns_txt_query_config,
     send_udp_dns_txt_query,
 };
-use crate::crypto::proof_net::{fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json};
-use crate::crypto::proof_overlay::{fetch_i2p_sam_nonce, fetch_tls_alpn_nonce};
+use crate::proof::net::{fetch_http_nonce, parse_dns_txt_record, parse_http_nonce_json};
+use crate::proof::overlay::{fetch_i2p_sam_nonce, fetch_tls_alpn_nonce};
 
-pub use crate::crypto::proof_net::DomainProofResponse;
+pub use crate::proof::net::DomainProofResponse;
 
 /// Supported domain network ecosystems in randbotd
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

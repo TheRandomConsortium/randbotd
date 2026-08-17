@@ -4,7 +4,7 @@ impl Database {
     /// Inserts a validated CA declaration into the CA subtable and persists to disk
     pub fn insert_ca(
         &self,
-        declaration: crate::crypto::ca::CaDeclaration,
+        declaration: crate::pki::ca::CaDeclaration,
     ) -> Result<[u8; 32], String> {
         declaration.subject.validate()?;
         declaration.issuer.validate()?;
@@ -16,7 +16,7 @@ impl Database {
             .map_err(|e| format!("Lock poison error: {}", e))?;
         store.insert(ca_id, declaration);
 
-        let export_map: std::collections::HashMap<String, crate::crypto::ca::CaDeclaration> = store
+        let export_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> = store
             .iter()
             .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
             .collect();
@@ -30,7 +30,7 @@ impl Database {
     }
 
     /// Retrieves a CA declaration by its ca_id
-    pub fn get_ca(&self, ca_id: &[u8; 32]) -> Option<crate::crypto::ca::CaDeclaration> {
+    pub fn get_ca(&self, ca_id: &[u8; 32]) -> Option<crate::pki::ca::CaDeclaration> {
         self.ca_store
             .read()
             .ok()
@@ -38,7 +38,7 @@ impl Database {
     }
 
     /// Returns a list of all registered CA declarations
-    pub fn list_cas(&self) -> Vec<crate::crypto::ca::CaDeclaration> {
+    pub fn list_cas(&self) -> Vec<crate::pki::ca::CaDeclaration> {
         self.ca_store
             .read()
             .map(|store| store.values().cloned().collect())
