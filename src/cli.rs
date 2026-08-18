@@ -1,7 +1,7 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "randbotd", author = "The Random Consortium", version = "2.0.0")]
+#[command(name = "randbotd", author = "The Random Consortium", version = "3.0.0")]
 pub struct Cli {
     /// Path to TOML configuration file (defaults to /etc/randbotd/randbotd.toml or ./randbotd.toml)
     #[arg(long)]

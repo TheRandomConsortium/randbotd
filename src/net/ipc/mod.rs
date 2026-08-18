@@ -1,5 +1,8 @@
 pub mod handler;
 
+#[cfg(test)]
+mod tests;
+
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use serde::{Deserialize, Serialize};
@@ -28,11 +31,29 @@ pub enum IpcCommand {
         #[serde(default)]
         is_draft: Option<bool>,
         #[serde(default)]
+        supported_domain_networks: Option<Vec<crate::proof::DomainNetworkType>>,
+    },
+    PublishOffer {
+        ca_id_hex: String,
+        #[serde(default)]
+        offer_id: Option<u32>,
+        name: String,
+        #[serde(default)]
         key_algorithm: Option<crate::crypto::agility::KeyAlgorithm>,
         #[serde(default)]
         supported_domain_networks: Option<Vec<crate::proof::DomainNetworkType>>,
         #[serde(default)]
         ttl_seconds: Option<u64>,
+        #[serde(default)]
+        is_draft: Option<bool>,
+    },
+    GetOffer {
+        ca_id_hex: String,
+        offer_id: u32,
+    },
+    ListOffers {
+        #[serde(default)]
+        ca_id_hex: Option<String>,
     },
     ChallengeDomainProof {
         domain: String,
@@ -142,333 +163,5 @@ impl IpcServer {
                 }
             }
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixStream;
-
-    #[tokio::test]
-    async fn test_ipc_command_import_peer_roundtrip() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_ipc_test_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let socket_path = temp_dir.join("randbotd.sock");
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let server = IpcServer::new(socket_path.clone(), Arc::clone(&phonebook));
-        let handle = server.spawn();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let stream = UnixStream::connect(&socket_path)
-            .await
-            .expect("Failed to connect to IPC socket");
-        let (reader, mut writer) = stream.into_split();
-
-        let cmd = IpcCommand::ImportPeer {
-            peer_addr: "127.0.0.1:43210".to_string(),
-        };
-        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
-        writer.write_all(cmd_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader = BufReader::new(reader);
-        let mut resp_line = String::new();
-        buf_reader.read_line(&mut resp_line).await.unwrap();
-
-        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
-        match resp {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains("127.0.0.1:43210"));
-            }
-            _ => panic!("Expected IpcResponse::Ok"),
-        }
-
-        let pb = phonebook.read().unwrap();
-        assert!(pb.all_peers().contains(&"127.0.0.1:43210".to_string()));
-
-        handle.abort();
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_ipc_publish_ca_roundtrip() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_ipc_ca_test_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let socket_path = temp_dir.join("randbotd.sock");
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let db = Arc::new(Database::open(&temp_dir).unwrap());
-        let server =
-            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
-        let handle = server.spawn();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let stream = UnixStream::connect(&socket_path)
-            .await
-            .expect("Failed to connect to IPC socket");
-        let (reader, mut writer) = stream.into_split();
-
-        let cmd = IpcCommand::PublishCa {
-            ca_id_hex: None,
-            common_name: "The Random Consortium Root CA".to_string(),
-            organization: Some("The Random Consortium".to_string()),
-            organizational_unit: Some("PKI".to_string()),
-            locality: Some("Valencia".to_string()),
-            state_or_province: Some("Valencia".to_string()),
-            country: Some("ES".to_string()),
-            email: Some("root@consortium.rand".to_string()),
-            is_intermediate: false,
-            path_len_constraint: None,
-            is_draft: None,
-            key_algorithm: None,
-            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
-            ttl_seconds: None,
-        };
-        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
-        writer.write_all(cmd_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader = BufReader::new(reader);
-        let mut resp_line = String::new();
-        buf_reader.read_line(&mut resp_line).await.unwrap();
-
-        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
-        match resp {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains(
-                    "CA Declaration `The Random Consortium Root CA` successfully published"
-                ));
-            }
-            _ => panic!("Expected IpcResponse::Ok, got {:?}", resp),
-        }
-
-        let cas = db.list_cas();
-        assert_eq!(cas.len(), 1);
-        assert_eq!(cas[0].subject.common_name, "The Random Consortium Root CA");
-        assert!(!cas[0].is_draft);
-
-        handle.abort();
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_ipc_ca_draft_and_edit_roundtrip() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_ipc_draft_test_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let socket_path = temp_dir.join("randbotd.sock");
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let db = Arc::new(Database::open(&temp_dir).unwrap());
-        let server =
-            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
-        let handle = server.spawn();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let stream = UnixStream::connect(&socket_path).await.unwrap();
-        let (reader, mut writer) = stream.into_split();
-
-        // 1. Create a draft CA
-        let draft_cmd = IpcCommand::PublishCa {
-            ca_id_hex: None,
-            common_name: "Consortium Draft CA".to_string(),
-            organization: Some("The Random Consortium".to_string()),
-            organizational_unit: None,
-            locality: None,
-            state_or_province: None,
-            country: Some("ES".to_string()),
-            email: None,
-            is_intermediate: false,
-            path_len_constraint: None,
-            is_draft: Some(true),
-            key_algorithm: None,
-            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
-            ttl_seconds: None,
-        };
-        let cmd_line = serde_json::to_string(&draft_cmd).unwrap() + "\n";
-        writer.write_all(cmd_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader = BufReader::new(reader);
-        let mut resp_line = String::new();
-        buf_reader.read_line(&mut resp_line).await.unwrap();
-
-        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
-        let ca_id_hex = match resp {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains("draft saved"));
-                message.split('`').nth(3).unwrap().to_string()
-            }
-            _ => panic!("Expected Ok response"),
-        };
-
-        let cas = db.list_cas();
-        assert_eq!(cas.len(), 1);
-        assert!(cas[0].is_draft);
-
-        // 2. Edit existing draft CA and finalize publish (is_draft = false)
-        let stream2 = UnixStream::connect(&socket_path).await.unwrap();
-        let (reader2, mut writer2) = stream2.into_split();
-
-        let edit_cmd = IpcCommand::PublishCa {
-            ca_id_hex: Some(ca_id_hex.clone()),
-            common_name: "Consortium Final CA".to_string(),
-            organization: Some("The Random Consortium".to_string()),
-            organizational_unit: Some("PKI Operations".to_string()),
-            locality: Some("Valencia".to_string()),
-            state_or_province: Some("Valencia".to_string()),
-            country: Some("ES".to_string()),
-            email: Some("ca@therandomconsortium.org".to_string()),
-            is_intermediate: false,
-            path_len_constraint: None,
-            is_draft: Some(false),
-            key_algorithm: None,
-            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
-            ttl_seconds: None,
-        };
-        let edit_line = serde_json::to_string(&edit_cmd).unwrap() + "\n";
-        writer2.write_all(edit_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader2 = BufReader::new(reader2);
-        let mut resp_line2 = String::new();
-        buf_reader2.read_line(&mut resp_line2).await.unwrap();
-
-        let resp2: IpcResponse = serde_json::from_str(&resp_line2).unwrap();
-        match resp2 {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains("successfully published"));
-            }
-            _ => panic!("Expected Ok response for edit"),
-        }
-
-        let cas_updated = db.list_cas();
-        assert_eq!(cas_updated.len(), 1);
-        assert_eq!(cas_updated[0].subject.common_name, "Consortium Final CA");
-        assert!(!cas_updated[0].is_draft);
-
-        handle.abort();
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_ipc_publish_ca_with_key_algorithms() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_ipc_algo_test_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let socket_path = temp_dir.join("randbotd.sock");
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let db = Arc::new(Database::open(&temp_dir).unwrap());
-        let server =
-            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
-        let handle = server.spawn();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let stream = UnixStream::connect(&socket_path).await.unwrap();
-        let (reader, mut writer) = stream.into_split();
-
-        let cmd = IpcCommand::PublishCa {
-            ca_id_hex: None,
-            common_name: "Consortium ML-DSA-44 PQC Root CA".to_string(),
-            organization: Some("The Random Consortium".to_string()),
-            organizational_unit: Some("PKI PQC".to_string()),
-            locality: None,
-            state_or_province: None,
-            country: Some("ES".to_string()),
-            email: None,
-            is_intermediate: false,
-            path_len_constraint: None,
-            is_draft: None,
-            key_algorithm: Some(crate::crypto::agility::KeyAlgorithm::MlDsa44),
-            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
-            ttl_seconds: None,
-        };
-        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
-        writer.write_all(cmd_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader = BufReader::new(reader);
-        let mut resp_line = String::new();
-        buf_reader.read_line(&mut resp_line).await.unwrap();
-
-        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
-        match resp {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains("ML-DSA-44"));
-            }
-            _ => panic!("Expected Ok response, got {:?}", resp),
-        }
-
-        let cas = db.list_cas();
-        assert_eq!(cas.len(), 1);
-        assert_eq!(
-            cas[0].key_algorithm,
-            crate::crypto::agility::KeyAlgorithm::MlDsa44
-        );
-
-        handle.abort();
-        let _ = std::fs::remove_dir_all(temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_ipc_publish_ca_with_custom_ttl() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("randbotd_ipc_ttl_test_{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let socket_path = temp_dir.join("randbotd.sock");
-
-        let phonebook = Arc::new(RwLock::new(Phonebook::new()));
-        let db = Arc::new(Database::open(&temp_dir).unwrap());
-        let server =
-            IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
-        let handle = server.spawn();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let stream = UnixStream::connect(&socket_path).await.unwrap();
-        let (reader, mut writer) = stream.into_split();
-
-        let cmd = IpcCommand::PublishCa {
-            ca_id_hex: None,
-            common_name: "Ephemeral Micro-TTL CA".to_string(),
-            organization: Some("The Random Consortium".to_string()),
-            organizational_unit: None,
-            locality: None,
-            state_or_province: None,
-            country: Some("ES".to_string()),
-            email: None,
-            is_intermediate: false,
-            path_len_constraint: None,
-            is_draft: None,
-            key_algorithm: None,
-            supported_domain_networks: Some(vec![crate::proof::DomainNetworkType::Clearnet]),
-            ttl_seconds: Some(1800), // 30 minutes
-        };
-        let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
-        writer.write_all(cmd_line.as_bytes()).await.unwrap();
-
-        let mut buf_reader = BufReader::new(reader);
-        let mut resp_line = String::new();
-        buf_reader.read_line(&mut resp_line).await.unwrap();
-
-        let resp: IpcResponse = serde_json::from_str(&resp_line).unwrap();
-        match resp {
-            IpcResponse::Ok { message } => {
-                assert!(message.contains("successfully published"));
-            }
-            _ => panic!("Expected Ok response, got {:?}", resp),
-        }
-
-        let cas = db.list_cas();
-        assert_eq!(cas.len(), 1);
-        assert_eq!(cas[0].ttl_seconds, 1800);
-
-        handle.abort();
-        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }

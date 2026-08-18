@@ -7,6 +7,7 @@ use std::sync::RwLock;
 
 pub mod ca_subtable;
 pub mod merkle;
+pub mod offer_subtable;
 pub mod sync;
 
 pub const MAX_STAGED_EVENTS: usize = 50;
@@ -23,11 +24,14 @@ pub struct Database {
     db_file_path: PathBuf,
     sync_offset_file_path: PathBuf,
     ca_file_path: PathBuf,
+    offer_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
     merkle_cache: MerkleCacheMap,
     ca_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::ca::CaDeclaration>>,
+    offer_store:
+        RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::offer::CertificateOffer>>>,
 }
 
 #[allow(dead_code)]
@@ -42,6 +46,7 @@ impl Database {
         let db_file_path = state_dir.join("event_log.jsonl");
         let sync_offset_file_path = state_dir.join("sync_offset.state");
         let ca_file_path = state_dir.join("ca_declarations.json");
+        let offer_file_path = state_dir.join("ca_offers.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -100,15 +105,38 @@ impl Database {
                 std::collections::HashMap::new()
             };
 
+        let loaded_offers: std::collections::HashMap<
+            [u8; 32],
+            Vec<crate::pki::offer::CertificateOffer>,
+        > = if offer_file_path.exists() {
+            let content = std::fs::read_to_string(&offer_file_path)
+                .map_err(|e| format!("Failed to read ca_offers file: {}", e))?;
+            let hex_map: std::collections::HashMap<
+                String,
+                Vec<crate::pki::offer::CertificateOffer>,
+            > = serde_json::from_str(&content).unwrap_or_default();
+            let mut map = std::collections::HashMap::new();
+            for (hex_key, offers) in hex_map {
+                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
+                    map.insert(bytes, offers);
+                }
+            }
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
+
         Ok(Self {
             db_file_path,
             sync_offset_file_path,
             ca_file_path,
+            offer_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
             merkle_cache: RwLock::new(std::collections::HashMap::new()),
             ca_store: RwLock::new(loaded_cas),
+            offer_store: RwLock::new(loaded_offers),
         })
     }
 

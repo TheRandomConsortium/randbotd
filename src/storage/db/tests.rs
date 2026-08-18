@@ -338,8 +338,11 @@ fn test_database_equivocation_truth_resolution() {
 }
 
 #[test]
-fn test_db_ca_subtable_persistence() {
+fn test_db_ca_and_offer_subtable_persistence() {
+    use crate::crypto::agility::KeyAlgorithm;
     use crate::pki::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+    use crate::pki::offer::CertificateOffer;
+    use crate::proof::DomainNetworkType;
 
     let temp_dir =
         std::env::temp_dir().join(format!("randbotd_ca_db_test_{}", rand::random::<u64>()));
@@ -359,30 +362,62 @@ fn test_db_ca_subtable_persistence() {
     let decl = CaDeclaration::new(
         ca_id,
         subject.clone(),
-        subject.clone(),
+        subject,
         false,
         None,
+        1700000000,
+        vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
+    )
+    .unwrap();
+
+    let inserted_id = db.insert_ca(decl).unwrap();
+    assert_eq!(inserted_id, ca_id);
+
+    // Insert an offer tied to this CA
+    let offer = CertificateOffer::new(
+        0,
+        ca_id,
+        "Standard Clearnet 90-day".to_string(),
+        KeyAlgorithm::Ed25519,
+        vec![DomainNetworkType::Clearnet],
+        7_776_000,
+        false,
         1700000000,
     )
     .unwrap();
 
-    let inserted_id = db.insert_ca(decl.clone()).unwrap();
-    assert_eq!(inserted_id, ca_id);
+    let (offer_id, cat_hash) = db.insert_offer(offer.clone()).unwrap();
+    assert_eq!(offer_id, 0);
 
-    let retrieved = db.get_ca(&ca_id).expect("Failed to get CA from DB");
-    assert_eq!(retrieved, decl);
+    let retrieved_ca = db.get_ca(&ca_id).expect("Failed to get CA from DB");
+    assert_eq!(retrieved_ca.current_catalog_hash, Some(cat_hash));
+    assert_eq!(retrieved_ca.offer_ids, vec![0]);
 
-    let all_cas = db.list_cas();
-    assert_eq!(all_cas.len(), 1);
-    assert_eq!(all_cas[0].subject.common_name, "Consortium Root CA");
+    let retrieved_offer = db.get_offer(&ca_id, 0).expect("Failed to get offer");
+    assert_eq!(retrieved_offer, offer);
 
-    // Close and reopen DB to verify JSON persistence
+    let ca_offers = db.list_offers_for_ca(&ca_id);
+    assert_eq!(ca_offers.len(), 1);
+
+    let catalog = db
+        .get_catalog_for_ca(&ca_id)
+        .expect("Failed to get catalog");
+    assert_eq!(catalog.offers.len(), 1);
+    assert_eq!(catalog.compute_hash(), cat_hash);
+
+    // Close and reopen DB to verify JSON persistence for both CAs and offers
     drop(db);
     let db_reopened = Database::open(&temp_dir).expect("Failed to reopen DB");
-    let retrieved_reopened = db_reopened
+    let retrieved_ca_reopened = db_reopened
         .get_ca(&ca_id)
         .expect("Failed to get CA from reopened DB");
-    assert_eq!(retrieved_reopened, decl);
+    assert_eq!(retrieved_ca_reopened.current_catalog_hash, Some(cat_hash));
+    assert_eq!(retrieved_ca_reopened.offer_ids, vec![0]);
+
+    let retrieved_offer_reopened = db_reopened
+        .get_offer(&ca_id, 0)
+        .expect("Failed to get offer from reopened DB");
+    assert_eq!(retrieved_offer_reopened, offer);
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::DaemonConfig;
-use crate::crypto::agility::KeyAlgorithm;
 use crate::proof::DomainNetworkType;
 
 /// Maximum field length constraints per RFC 5280 / ITU-T X.520
@@ -12,18 +11,8 @@ pub const MAX_OU_LENGTH: usize = 64;
 pub const MAX_LOCALITY_LENGTH: usize = 128;
 pub const MAX_STATE_LENGTH: usize = 128;
 
-pub const DEFAULT_CA_TTL_SECONDS: u64 = 7_776_000; // 90 days
-
-fn default_key_algorithm() -> KeyAlgorithm {
-    KeyAlgorithm::Ed25519
-}
-
 fn default_supported_domain_networks() -> Vec<DomainNetworkType> {
     vec![DomainNetworkType::Clearnet]
-}
-
-fn default_ttl_seconds() -> u64 {
-    DEFAULT_CA_TTL_SECONDS
 }
 
 /// Standard X.509 Distinguished Name (DN) subject and issuer metadata
@@ -117,7 +106,7 @@ impl CaSubjectMetadata {
     }
 }
 
-/// Declaration payload for a Root or Intermediate Certificate Authority (CA)
+/// Sovereign Root or Intermediate Certificate Authority (CA) identity declaration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaDeclaration {
     pub ca_id: [u8; 32],
@@ -128,16 +117,16 @@ pub struct CaDeclaration {
     pub created_at: u64,
     #[serde(default)]
     pub is_draft: bool,
-    #[serde(default = "default_key_algorithm")]
-    pub key_algorithm: KeyAlgorithm,
     #[serde(default = "default_supported_domain_networks")]
     pub supported_domain_networks: Vec<DomainNetworkType>,
-    #[serde(default = "default_ttl_seconds")]
-    pub ttl_seconds: u64,
+    #[serde(default)]
+    pub current_catalog_hash: Option<[u8; 32]>,
+    #[serde(default)]
+    pub offer_ids: Vec<u32>,
 }
 
 impl CaDeclaration {
-    /// Constructs and validates a new CaDeclaration with default Clearnet capabilities and default 90-day TTL
+    /// Constructs and validates a new published CaDeclaration with given network capabilities
     pub fn new(
         ca_id: [u8; 32],
         subject: CaSubjectMetadata,
@@ -145,8 +134,9 @@ impl CaDeclaration {
         is_intermediate: bool,
         path_len_constraint: Option<u32>,
         created_at: u64,
+        supported_domain_networks: Vec<DomainNetworkType>,
     ) -> Result<Self, String> {
-        Self::new_with_draft_and_algorithm_and_networks(
+        Self::new_with_draft(
             ca_id,
             subject,
             issuer,
@@ -154,15 +144,13 @@ impl CaDeclaration {
             path_len_constraint,
             created_at,
             false,
-            KeyAlgorithm::Ed25519,
-            vec![DomainNetworkType::Clearnet],
-            DEFAULT_CA_TTL_SECONDS,
+            supported_domain_networks,
         )
     }
 
-    /// Constructs and validates a new CaDeclaration with full parameters including domain network capabilities and custom certificate TTL
+    /// Constructs and validates a new CaDeclaration with draft status option
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_draft_and_algorithm_and_networks(
+    pub fn new_with_draft(
         ca_id: [u8; 32],
         subject: CaSubjectMetadata,
         issuer: CaSubjectMetadata,
@@ -170,9 +158,7 @@ impl CaDeclaration {
         path_len_constraint: Option<u32>,
         created_at: u64,
         is_draft: bool,
-        key_algorithm: KeyAlgorithm,
         supported_domain_networks: Vec<DomainNetworkType>,
-        ttl_seconds: u64,
     ) -> Result<Self, String> {
         subject.validate()?;
         issuer.validate()?;
@@ -188,10 +174,6 @@ impl CaDeclaration {
             return Err("CA must support at least one domain network type".to_string());
         }
 
-        if ttl_seconds == 0 {
-            return Err("TTL / validity period must be greater than 0 seconds".to_string());
-        }
-
         Ok(Self {
             ca_id,
             subject,
@@ -200,15 +182,10 @@ impl CaDeclaration {
             path_len_constraint,
             created_at,
             is_draft,
-            key_algorithm,
             supported_domain_networks,
-            ttl_seconds,
+            current_catalog_hash: None,
+            offer_ids: Vec::new(),
         })
-    }
-
-    /// Calculates the certificate validity window (notBefore, notAfter) starting from `current_time`
-    pub fn validity_window(&self, current_time: u64) -> (u64, u64) {
-        (current_time, current_time.saturating_add(self.ttl_seconds))
     }
 
     /// Validates advertised CA capabilities against active node DaemonConfig
@@ -327,6 +304,7 @@ mod tests {
             false,
             Some(2),
             1700000000,
+            vec![DomainNetworkType::Clearnet],
         );
         assert!(decl_err.is_err());
 
@@ -338,27 +316,12 @@ mod tests {
             true,
             Some(2),
             1700000000,
+            vec![DomainNetworkType::Clearnet],
         );
         assert!(decl_ok.is_ok());
 
         // Draft mode constructor test
-        let draft_ok = CaDeclaration::new_with_draft_and_algorithm_and_networks(
-            ca_id,
-            subject.clone(),
-            subject.clone(),
-            true,
-            Some(1),
-            1700000000,
-            true,
-            KeyAlgorithm::Ed25519,
-            vec![DomainNetworkType::Clearnet],
-            DEFAULT_CA_TTL_SECONDS,
-        );
-        assert!(draft_ok.is_ok());
-        assert!(draft_ok.unwrap().is_draft);
-
-        // Algorithm constructor test
-        let algo_ok = CaDeclaration::new_with_draft_and_algorithm_and_networks(
+        let draft_ok = CaDeclaration::new_with_draft(
             ca_id,
             subject.clone(),
             subject,
@@ -366,12 +329,10 @@ mod tests {
             Some(1),
             1700000000,
             true,
-            KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::Clearnet],
-            DEFAULT_CA_TTL_SECONDS,
         );
-        assert!(algo_ok.is_ok());
-        assert_eq!(algo_ok.unwrap().key_algorithm, KeyAlgorithm::Ed25519);
+        assert!(draft_ok.is_ok());
+        assert!(draft_ok.unwrap().is_draft);
     }
 
     #[test]
@@ -387,17 +348,14 @@ mod tests {
         };
         let ca_id = compute_ca_id(&subject.common_name, b"test_net_pubkey");
 
-        let decl = CaDeclaration::new_with_draft_and_algorithm_and_networks(
+        let decl = CaDeclaration::new(
             ca_id,
             subject.clone(),
             subject,
             false,
             None,
             1700000000,
-            false,
-            KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
-            DEFAULT_CA_TTL_SECONDS,
         )
         .expect("Failed to create CA declaration");
 
@@ -408,54 +366,6 @@ mod tests {
         // Add Tor support -> should pass validation
         config.privacy.tor_socks_proxy = Some("127.0.0.1:9050".to_string());
         assert!(decl.validate_against_config(&config).is_ok());
-    }
-
-    #[test]
-    fn test_ca_declaration_custom_ttl_and_validity_window() {
-        let subject = CaSubjectMetadata {
-            common_name: "Micro-TTL CA".to_string(),
-            organization: None,
-            organizational_unit: None,
-            locality: None,
-            state_or_province: None,
-            country: Some("ES".to_string()),
-            email: None,
-        };
-        let ca_id = compute_ca_id(&subject.common_name, b"micro_key");
-
-        // Micro-TTL (300 seconds = 5 minutes)
-        let micro_decl = CaDeclaration::new_with_draft_and_algorithm_and_networks(
-            ca_id,
-            subject.clone(),
-            subject.clone(),
-            false,
-            None,
-            1700000000,
-            false,
-            KeyAlgorithm::Ed25519,
-            vec![DomainNetworkType::Clearnet],
-            300,
-        )
-        .expect("Failed to create micro-TTL CA");
-        assert_eq!(micro_decl.ttl_seconds, 300);
-        let (nb, na) = micro_decl.validity_window(1700000000);
-        assert_eq!(nb, 1700000000);
-        assert_eq!(na, 1700000300);
-
-        // 0 TTL should fail
-        let zero_ttl_err = CaDeclaration::new_with_draft_and_algorithm_and_networks(
-            ca_id,
-            subject.clone(),
-            subject,
-            false,
-            None,
-            1700000000,
-            false,
-            KeyAlgorithm::Ed25519,
-            vec![DomainNetworkType::Clearnet],
-            0,
-        );
-        assert!(zero_ttl_err.is_err());
     }
 
     #[test]

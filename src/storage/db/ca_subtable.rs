@@ -14,7 +14,17 @@ impl Database {
             .ca_store
             .write()
             .map_err(|e| format!("Lock poison error: {}", e))?;
-        store.insert(ca_id, declaration);
+
+        let mut decl_to_insert = declaration;
+        if let Some(existing) = store.get(&ca_id) {
+            if decl_to_insert.current_catalog_hash.is_none() {
+                decl_to_insert.current_catalog_hash = existing.current_catalog_hash;
+            }
+            if decl_to_insert.offer_ids.is_empty() {
+                decl_to_insert.offer_ids = existing.offer_ids.clone();
+            }
+        }
+        store.insert(ca_id, decl_to_insert);
 
         let export_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> = store
             .iter()
