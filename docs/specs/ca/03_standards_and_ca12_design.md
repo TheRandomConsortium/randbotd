@@ -30,8 +30,8 @@
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
 | `CA-11` | **Distributed Custodian Swarm & Threshold Key Delegation Engine** | Enables CAs to distribute operational load and key signing across $n$ decentralized nodes using threshold cryptography (FROST / $m$-of-$n$ Schnorr/Ed25519 DKG). | ⚪ |
-| `CA-12` | **Multi-Tier CA Certificate Offer Catalog & Profile Engine** | Replaces single static pricing with a structured Offer Catalog (`CAPublishOfferCatalog`). | ⚪ |
-| `CA-13` | **Cryptographic Certificate Serial Entropy Engine** | Standard-compliant generator (RFC 5280 / CABF BR §7.1.4.2.1) injecting 64-160 bits of CSPRNG entropy into certificate serial numbers. | 🔴 |
+| `CA-12` | **Multi-Tier CA Certificate Offer Catalog & Profile Engine** | Replaces single static pricing with a structured Offer Catalog (`CAPublishOfferCatalog`). | 🟢 |
+| `CA-13` | **Cryptographic Certificate Serial Entropy Engine** | Standard-compliant generator (RFC 5280 / CABF BR §7.1.4.2.1) injecting 64-160 bits of CSPRNG entropy into certificate serial numbers. | 🟢 |
 | `CA-14` | **Subtree Name Constraints Engine (`permittedSubtrees`/`excludedSubtrees`)** | Standard-compliant implementation of X.509 v3 Name Constraints extension (RFC 5280 §4.2.1.10) marked `critical = TRUE`. | 🔴 |
 | `CA-15` | **P2P Authority Information Access (AIA) & P2P OCSP Engine** | Extends RFC 5280 AIA extension with `randbotd://` P2P swarm URIs for parent chains and real-time P2P revocation status. | 🔴 |
 ```

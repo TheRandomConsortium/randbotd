@@ -1,6 +1,6 @@
 [package]
 name = "randbotd"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 authors = ["The Random Consortium"]
 description = "Random Consortium's Certificate Bot Daemon"
