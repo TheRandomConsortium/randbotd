@@ -6,7 +6,7 @@ This document tracks minor maintenance tasks, refactoring needs, infrastructure 
 
 ## 🧹 Active Chores & Technical Debt
 
-* [ ] **`ENTROPY-01` Configurable External Entropy Source URLs**: Allow operators to specify custom or mirror entropy source URLs in `randbotd.toml` (e.g. `[entropy] source_urls = ["https://www.gutenberg.org/dirs/", "https://mirror.gutenberg.org/dirs/"]`) so the driller can dynamically query multiple fallback mirrors if the primary Project Gutenberg server is down.
+* [ ] **`ENTROPY-01` Configurable Plaintext Entropy Source URLs (`[entropy] source_urls`)**: Allow operators to configure arbitrary plaintext URLs in `randbotd.toml` (e.g. `[entropy] source_urls = ["http://calories.tplinkdns.com/insultos/insultos.csv", "https://example.org/corpus.txt", "..."]`) as dynamic Gutenberg drilldown alternatives. The engine fetches text content (HTML, CSV, TXT, JSON — strictly excluding binary/PDF/multipart/`application/octet-stream`), splits words, deduplicates the corpus vocabulary, computes true Shannon entropy ($H = \log_2(N)$), and samples CSPRNG words across iterations until reaching 256 bits.
 
 ---
 

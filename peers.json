@@ -3,7 +3,7 @@
     "85.52.85.114:43210": {
       "pubkey_hex": "7669ea97c4cdcaa5a79ca1246999707a381b888e9e64b577d6f75a148392cb39",
       "address": "85.52.85.114:43210",
-      "last_seen": 1787228956,
+      "last_seen": 1787231675,
       "self_declared_seed": false,
       "verified_seed": false,
       "ponderation_score": 50
