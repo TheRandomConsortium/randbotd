@@ -120,42 +120,23 @@ pub struct CaDeclaration {
     #[serde(default = "default_supported_domain_networks")]
     pub supported_domain_networks: Vec<DomainNetworkType>,
     #[serde(default)]
+    pub permitted_subtrees: Vec<String>,
+    #[serde(default)]
     pub current_catalog_hash: Option<[u8; 32]>,
     #[serde(default)]
     pub offer_ids: Vec<u32>,
 }
 
 impl CaDeclaration {
-    /// Constructs and validates a new published CaDeclaration with given network capabilities
+    /// Constructs and validates a new published CaDeclaration with full subtree constraints (CA-14)
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ca_id: [u8; 32],
         subject: CaSubjectMetadata,
         issuer: CaSubjectMetadata,
         is_intermediate: bool,
         path_len_constraint: Option<u32>,
-        created_at: u64,
-        supported_domain_networks: Vec<DomainNetworkType>,
-    ) -> Result<Self, String> {
-        Self::new_with_draft(
-            ca_id,
-            subject,
-            issuer,
-            is_intermediate,
-            path_len_constraint,
-            created_at,
-            false,
-            supported_domain_networks,
-        )
-    }
-
-    /// Constructs and validates a new CaDeclaration with draft status option
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_draft(
-        ca_id: [u8; 32],
-        subject: CaSubjectMetadata,
-        issuer: CaSubjectMetadata,
-        is_intermediate: bool,
-        path_len_constraint: Option<u32>,
+        permitted_subtrees: Vec<String>,
         created_at: u64,
         is_draft: bool,
         supported_domain_networks: Vec<DomainNetworkType>,
@@ -166,6 +147,13 @@ impl CaDeclaration {
         if !is_intermediate && path_len_constraint.is_some() {
             return Err(
                 "path_len_constraint is only valid for Intermediate CAs (is_intermediate = true)"
+                    .to_string(),
+            );
+        }
+
+        if !is_intermediate && !permitted_subtrees.is_empty() {
+            return Err(
+                "permitted_subtrees is only valid for Intermediate CAs (is_intermediate = true)"
                     .to_string(),
             );
         }
@@ -183,9 +171,21 @@ impl CaDeclaration {
             created_at,
             is_draft,
             supported_domain_networks,
+            permitted_subtrees,
             current_catalog_hash: None,
             offer_ids: Vec::new(),
         })
+    }
+
+    /// Checks if a domain is permitted under this CA's subtree name constraints.
+    // WARNING: FUTURE CERTIFICATE ISSUANCE INFRASTRUCTURE (CA-05 / CA-14).
+    // This should stop being dead code by CA-05 or deleted.
+    #[allow(dead_code)]
+    pub fn is_domain_permitted(&self, domain: &str) -> bool {
+        crate::pki::scope::CertificateCoverageScope::is_domain_in_permitted_subtrees(
+            domain,
+            &self.permitted_subtrees,
+        )
     }
 
     /// Validates advertised CA capabilities against active node DaemonConfig
@@ -303,7 +303,9 @@ mod tests {
             subject.clone(),
             false,
             Some(2),
+            Vec::new(),
             1700000000,
+            false,
             vec![DomainNetworkType::Clearnet],
         );
         assert!(decl_err.is_err());
@@ -315,18 +317,21 @@ mod tests {
             subject.clone(),
             true,
             Some(2),
+            Vec::new(),
             1700000000,
+            false,
             vec![DomainNetworkType::Clearnet],
         );
         assert!(decl_ok.is_ok());
 
         // Draft mode constructor test
-        let draft_ok = CaDeclaration::new_with_draft(
+        let draft_ok = CaDeclaration::new(
             ca_id,
             subject.clone(),
             subject,
             true,
             Some(1),
+            Vec::new(),
             1700000000,
             true,
             vec![DomainNetworkType::Clearnet],
@@ -354,7 +359,9 @@ mod tests {
             subject,
             false,
             None,
+            Vec::new(),
             1700000000,
+            false,
             vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
         )
         .expect("Failed to create CA declaration");
@@ -378,5 +385,53 @@ mod tests {
 
         assert_ne!(id1, id2);
         assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_ca_declaration_permitted_subtrees_validation() {
+        let subject = CaSubjectMetadata {
+            common_name: "Intermediate Delegated CA".to_string(),
+            organization: None,
+            organizational_unit: None,
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+        };
+        let ca_id = compute_ca_id(&subject.common_name, b"test_delegated_key");
+
+        // Root CA with non-empty permitted_subtrees must fail
+        let root_err = CaDeclaration::new(
+            ca_id,
+            subject.clone(),
+            subject.clone(),
+            false,
+            None,
+            vec!["community.hns".to_string()],
+            1700000000,
+            false,
+            vec![DomainNetworkType::Handshake],
+        );
+        assert!(root_err.is_err());
+
+        // Intermediate CA with permitted_subtrees must succeed
+        let inter_ok = CaDeclaration::new(
+            ca_id,
+            subject.clone(),
+            subject,
+            true,
+            Some(0),
+            vec!["community.hns".to_string()],
+            1700000000,
+            false,
+            vec![DomainNetworkType::Handshake],
+        );
+
+        assert!(inter_ok.is_ok());
+
+        let ca = inter_ok.unwrap();
+        assert!(ca.is_domain_permitted("community.hns"));
+        assert!(ca.is_domain_permitted("sub.community.hns"));
+        assert!(!ca.is_domain_permitted("otherdomain.org"));
     }
 }

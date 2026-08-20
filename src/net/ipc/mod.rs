@@ -1,7 +1,17 @@
 pub mod handler;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "full-suite"))]
 mod tests;
+#[cfg(all(test, feature = "full-suite"))]
+mod tests_offer;
+
+#[cfg(all(test, not(feature = "full-suite")))]
+#[test]
+fn notify_ipc_tests_skipped() {
+    eprintln!(
+        "\n  ℹ️ [IPC Profile] IPC tests weren't launched. Launch them individually or launch `cargo test --features full-suite`. This will take long; we recommend you write unit tests rather than complex e2e.\n"
+    );
+}
 
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
@@ -32,6 +42,8 @@ pub enum IpcCommand {
         is_draft: Option<bool>,
         #[serde(default)]
         supported_domain_networks: Option<Vec<crate::proof::DomainNetworkType>>,
+        #[serde(default)]
+        permitted_subtrees: Option<Vec<String>>,
     },
     PublishOffer {
         ca_id_hex: String,
@@ -44,6 +56,8 @@ pub enum IpcCommand {
         supported_domain_networks: Option<Vec<crate::proof::DomainNetworkType>>,
         #[serde(default)]
         ttl_seconds: Option<u64>,
+        #[serde(default)]
+        coverage_scope: Option<crate::pki::scope::CertificateCoverageScope>,
         #[serde(default)]
         is_draft: Option<bool>,
     },

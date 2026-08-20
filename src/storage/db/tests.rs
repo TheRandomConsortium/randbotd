@@ -365,7 +365,9 @@ fn test_db_ca_and_offer_subtable_persistence() {
         subject,
         false,
         None,
+        Vec::new(),
         1700000000,
+        false,
         vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
     )
     .unwrap();
@@ -381,6 +383,7 @@ fn test_db_ca_and_offer_subtable_persistence() {
         KeyAlgorithm::Ed25519,
         vec![DomainNetworkType::Clearnet],
         7_776_000,
+        crate::pki::scope::CertificateCoverageScope::SingleFqdn,
         false,
         1700000000,
     )

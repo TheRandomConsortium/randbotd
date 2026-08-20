@@ -54,4 +54,8 @@ pub struct Cli {
     /// Allow falling back to /etc/machine-id for key encryption if no systemd/keyring masterpass is set
     #[arg(long)]
     pub allow_insecure_machine_id_fallback: bool,
+
+    /// Allow falling back to embedded Crypto Anarchist Manifesto corpus if external Project Gutenberg servers are unreachable
+    #[arg(long)]
+    pub allow_entropy_fallback: bool,
 }

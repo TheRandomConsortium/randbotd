@@ -85,6 +85,19 @@ pub struct StorageConfig {
     pub state_dir: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntropyConfig {
+    pub allow_fallback: Option<bool>,
+}
+
+impl Default for EntropyConfig {
+    fn default() -> Self {
+        Self {
+            allow_fallback: Some(false),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DaemonConfig {
     #[serde(default)]
@@ -95,6 +108,8 @@ pub struct DaemonConfig {
     pub handshake: HandshakeConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub entropy: EntropyConfig,
 }
 
 impl DaemonConfig {

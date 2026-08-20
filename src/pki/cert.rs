@@ -10,6 +10,14 @@ pub const WOT_EXTENSION_UUID: &str = "f9c616c7-8e4d-4f84-a32e-596b5ada63d2";
 /// Criticality flag for randbotd WoT validation extension per RFC 5280 / CA-10
 pub const WOT_EXTENSION_CRITICAL: bool = true;
 
+/// Standard X.509 v3 Name Constraints extension OID per RFC 5280 §4.2.1.10 (CA-14)
+#[allow(dead_code)]
+pub const OID_NAME_CONSTRAINTS: &str = "2.5.29.30";
+
+/// Standard criticality flag for RFC 5280 Name Constraints extension in Intermediate CAs (CA-14)
+#[allow(dead_code)]
+pub const NAME_CONSTRAINTS_CRITICAL: bool = true;
+
 /// Minimum certificate serial number entropy bits per CA/Browser Forum BR §7.1.4.2.1
 pub const MIN_SERIAL_ENTROPY_BITS: usize = 64;
 
@@ -220,6 +228,12 @@ mod tests {
         assert!(warning.contains(WOT_EXTENSION_UUID));
         assert!(warning.contains("critical WoT extension"));
         assert!(warning.contains("will not work in standard browsers"));
+    }
+
+    #[test]
+    fn test_ca_14_name_constraints_constants() {
+        assert_eq!(OID_NAME_CONSTRAINTS, "2.5.29.30");
+        const { assert!(NAME_CONSTRAINTS_CRITICAL) };
     }
 
     #[test]

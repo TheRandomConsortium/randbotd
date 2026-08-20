@@ -1,6 +1,6 @@
 [package]
 name = "randbotd"
-version = "3.1.0"
+version = "3.2.0"
 edition = "2021"
 authors = ["The Random Consortium"]
 description = "Random Consortium's Certificate Bot Daemon"
@@ -31,8 +31,9 @@ rustls = { version = "0.21", features = ["dangerous_configuration"] }
 webpki-roots = "0.25"
 idna = "1.0"
 
-
-
+[features]
+default = []
+full-suite = []
 
 [package.metadata.deb]
 maintainer = "The Random Consortium"

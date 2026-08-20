@@ -8,19 +8,18 @@ pub struct GutenbergMnemonic;
 impl GutenbergMnemonic {
     /// Generates 256 bits of true entropy by drilling down Project Gutenberg (`https://www.gutenberg.org/dirs/`)
     /// rolling CSPRNG dices to sample words from random books until accumulated Shannon entropy >= 256 bits.
-    pub fn generate_256bit_phrase() -> (Vec<u8>, String) {
+    /// If `allow_fallback` is enabled, falls back to sampling from Timothy C. May's Crypto Anarchist Manifesto if network drilling fails.
+    pub fn generate_256bit_phrase(allow_fallback: bool) -> (Vec<u8>, String) {
         let driller = GutenbergDriller::new();
         let mut words = Vec::new();
         let mut total_entropy_bits: f64 = 0.0;
 
         let mut attempts = 0;
-        while total_entropy_bits < 256.0 && attempts < 100 {
+        while total_entropy_bits < 256.0 && attempts < 60 {
             attempts += 1;
             if let Ok((word_str, pool_size)) = driller.drill_random_word() {
                 let cleaned = clean_word(&word_str);
                 if !cleaned.is_empty() && !words.contains(&cleaned) {
-                    // Shannon entropy contributed by picking 1 item uniformly out of a pool of size N:
-                    // H = log2(pool_size) bits
                     let word_entropy = if pool_size > 1 {
                         (pool_size as f64).log2()
                     } else {
@@ -32,8 +31,25 @@ impl GutenbergMnemonic {
             }
         }
 
-        if words.is_empty() {
-            panic!("Network failure: Unable to drill Project Gutenberg books for key entropy.");
+        // If Project Gutenberg servers are unreachable and allow_fallback is enabled
+        if total_entropy_bits < 256.0 && allow_fallback {
+            let manifesto_words = extract_words_from_text(FALLBACK_CRYPTO_ANARCHIST_MANIFESTO);
+            let pool_size = manifesto_words.len();
+            if pool_size > 0 {
+                let word_entropy = (pool_size as f64).log2();
+                while total_entropy_bits < 256.0 {
+                    let idx = rand_dice(pool_size);
+                    let w = manifesto_words[idx].clone();
+                    if !words.contains(&w) {
+                        words.push(w);
+                        total_entropy_bits += word_entropy;
+                    }
+                }
+            }
+        }
+
+        if total_entropy_bits < 256.0 || words.is_empty() {
+            panic!("Network failure: Unable to drill Project Gutenberg books for key entropy. Use --allow-entropy-fallback or configure [entropy] allow_fallback = true in randbotd.toml.");
         }
 
         let phrase = words.join(" ");
@@ -107,9 +123,9 @@ pub struct GutenbergDriller {
 impl GutenbergDriller {
     pub fn new() -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(2))
             .user_agent("randbotd/0.1.0 Gutenberg-Mnemonic-Driller")
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .redirect(reqwest::redirect::Policy::limited(3))
             .build()
             .unwrap_or_default();
         Self { client }
@@ -168,23 +184,10 @@ impl GutenbergDriller {
             .send()
             .map_err(|e| e.to_string())?;
         let text = res.text().map_err(|e| e.to_string())?;
-
-        let mut words: Vec<String> = text
-            .split_whitespace()
-            .map(|w| {
-                w.trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_lowercase()
-            })
-            .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_alphabetic()))
-            .collect();
-
+        let words = extract_words_from_text(&text);
         if words.is_empty() {
             return Err("No valid words found in book".into());
         }
-
-        // Deduplicate word pool to determine true unique corpus vocabulary size
-        words.sort();
-        words.dedup();
 
         let pool_size = words.len();
         let word_idx = rand_dice(pool_size);
@@ -196,6 +199,20 @@ impl Default for GutenbergDriller {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn extract_words_from_text(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| w.len() >= 3 && w.chars().all(|c| c.is_alphabetic()))
+        .collect();
+    words.sort();
+    words.dedup();
+    words
 }
 
 fn rand_dice(max: usize) -> usize {
@@ -224,13 +241,25 @@ fn extract_html_links(html: &str) -> Vec<String> {
     links
 }
 
+const FALLBACK_CRYPTO_ANARCHIST_MANIFESTO: &str = r#"
+The Crypto Anarchist Manifesto
+Timothy C. May, 1988
+
+A specter is haunting the modern world, the specter of crypto anarchy.
+Computer technology is on the verge of providing the ability for individuals and groups to communicate and interact with each other in a totally anonymous manner. Two persons may exchange messages, conduct business, and negotiate electronic contracts without ever knowing the True Name, or legal identity, of the other. Interactions over networks will be untraceable, via extensive re-routing of encrypted packets and tamper-proof boxes which implement cryptographic protocols with nearly perfect assurance against any tampering. Reputations will be of central importance, far more important in dealings than even the credit ratings of today. These developments will alter completely the nature of government regulation, the ability to tax and control economic interactions, the ability to keep information secret, and will even alter the nature of trust and reputation.
+The technology for this revolution--and it surely will be both a social and economic revolution--has existed in theory for the past decade. The methods are based upon public-key encryption, zero-knowledge interactive proof systems, and various software protocols for interaction, authentication, and verification. The focus has until now been on academic conferences in Europe and the U.S., conferences monitored closely by the National Security Agency. But only recently have computer networks and personal computers attained sufficient speed to make the ideas practically realizable. And the next ten years will bring enough additional speed to make the ideas economically feasible and essentially unstoppable. High-speed networks, ISDN, tamper-proof boxes, smart cards, satellites, Ku-band transmitters, multi-MIPS personal computers, and encryption chips now under development will be some of the enabling technologies.
+The State will of course try to slow or halt the spread of this technology, citing national security concerns, use of the technology by drug dealers and tax evaders, and fears of societal disintegration. Many of these concerns will be valid; crypto anarchy will allow national secrets to be trade freely and will allow illicit and stolen materials to be traded. An anonymous computerized market will even make possible abhorrent markets for assassinations and extortion. Various criminal and foreign elements will be active users of CryptoNet. But this will not halt the spread of crypto anarchy.
+Just as the technology of printing altered and reduced the power of medieval guilds and the social power structure, so too will cryptologic methods fundamentally alter the nature of corporations and of government interference in economic transactions. Combined with emerging information markets, crypto anarchy will create a liquid market for any and all material which can be put into words and pictures. And just as a seemingly minor invention like barbed wire made possible the fencing-off of vast ranches and farms, thus altering forever the concepts of land and property rights in the frontier West, so too will the seemingly minor discovery out of an arcane branch of mathematics come to be the wire clippers which dismantle the barbed wire around intellectual property.
+Arise, you have nothing to lose but your barbed wire fences!
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_gutenberg_mnemonic_roundtrip() {
-        let (seed1, phrase) = GutenbergMnemonic::generate_256bit_phrase();
+        let (seed1, phrase) = GutenbergMnemonic::generate_256bit_phrase(true);
         assert_eq!(seed1.len(), 32);
         assert!(!phrase.is_empty());
 

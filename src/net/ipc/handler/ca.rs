@@ -35,6 +35,7 @@ impl IpcHandler for CaHandler {
                 path_len_constraint,
                 is_draft,
                 supported_domain_networks,
+                permitted_subtrees,
             } => Some(Self::handle_publish_ca(
                 ca_id_hex.as_deref(),
                 common_name,
@@ -48,6 +49,7 @@ impl IpcHandler for CaHandler {
                 *path_len_constraint,
                 *is_draft,
                 supported_domain_networks.as_ref(),
+                permitted_subtrees.as_ref(),
                 phonebook,
                 db,
             )),
@@ -71,6 +73,7 @@ impl CaHandler {
         path_len_constraint: Option<u32>,
         is_draft: Option<bool>,
         supported_domain_networks: Option<&Vec<DomainNetworkType>>,
+        permitted_subtrees: Option<&Vec<String>>,
         phonebook: &Arc<RwLock<Phonebook>>,
         db: Option<&Arc<Database>>,
     ) -> IpcResponse {
@@ -107,29 +110,19 @@ impl CaHandler {
         let networks = supported_domain_networks
             .cloned()
             .unwrap_or_else(|| vec![DomainNetworkType::Clearnet]);
+        let subtrees = permitted_subtrees.cloned().unwrap_or_default();
 
-        let decl_res = if is_draft_val {
-            CaDeclaration::new_with_draft(
-                ca_id,
-                subject.clone(),
-                subject,
-                is_intermediate,
-                path_len_constraint,
-                created_at,
-                true,
-                networks,
-            )
-        } else {
-            CaDeclaration::new(
-                ca_id,
-                subject.clone(),
-                subject,
-                is_intermediate,
-                path_len_constraint,
-                created_at,
-                networks,
-            )
-        };
+        let decl_res = CaDeclaration::new(
+            ca_id,
+            subject.clone(),
+            subject,
+            is_intermediate,
+            path_len_constraint,
+            subtrees,
+            created_at,
+            is_draft_val,
+            networks,
+        );
 
         match decl_res {
             Err(e) => IpcResponse::Error { reason: e },

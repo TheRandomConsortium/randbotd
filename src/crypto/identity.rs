@@ -85,10 +85,12 @@ pub async fn init_node_identity(args: &Cli, base_state_dir: &Path) -> NodeIdenti
         }
 
         println!("  -> Drilling Project Gutenberg entropy pool for 256-bit mnemonic seed...");
-        let (raw_seed, mnemonic_phrase) =
-            tokio::task::spawn_blocking(GutenbergMnemonic::generate_256bit_phrase)
-                .await
-                .expect("Mnemonic generation task failed");
+        let allow_entropy_fallback = args.allow_entropy_fallback;
+        let (raw_seed, mnemonic_phrase) = tokio::task::spawn_blocking(move || {
+            GutenbergMnemonic::generate_256bit_phrase(allow_entropy_fallback)
+        })
+        .await
+        .expect("Mnemonic generation task failed");
 
         if raw_seed.len() != 32 {
             eprintln!("  -> FATAL ERROR: Invalid seed derived from Gutenberg entropy pool.");

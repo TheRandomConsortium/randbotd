@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
 use crate::pki::ca::CaDeclaration;
+use crate::pki::scope::CertificateCoverageScope;
 use crate::proof::DomainNetworkType;
 
 pub const DEFAULT_OFFER_TTL_SECONDS: u64 = 7_776_000; // 90 days
@@ -21,6 +22,10 @@ fn default_offer_ttl_seconds() -> u64 {
     DEFAULT_OFFER_TTL_SECONDS
 }
 
+fn default_offer_coverage_scope() -> CertificateCoverageScope {
+    CertificateCoverageScope::SingleFqdn
+}
+
 /// Certificate Offer (or Certificate Profile) defining issuance terms under a specific CA
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CertificateOffer {
@@ -33,6 +38,8 @@ pub struct CertificateOffer {
     pub supported_domain_networks: Vec<DomainNetworkType>,
     #[serde(default = "default_offer_ttl_seconds")]
     pub ttl_seconds: u64,
+    #[serde(default = "default_offer_coverage_scope")]
+    pub coverage_scope: CertificateCoverageScope,
     #[serde(default)]
     pub is_draft: bool,
     pub created_at: u64,
@@ -47,6 +54,7 @@ impl CertificateOffer {
         key_algorithm: KeyAlgorithm,
         supported_domain_networks: Vec<DomainNetworkType>,
         ttl_seconds: u64,
+        coverage_scope: CertificateCoverageScope,
         is_draft: bool,
         created_at: u64,
     ) -> Result<Self, String> {
@@ -77,6 +85,7 @@ impl CertificateOffer {
             key_algorithm,
             supported_domain_networks,
             ttl_seconds,
+            coverage_scope,
             is_draft,
             created_at,
         })
@@ -155,7 +164,7 @@ impl CaOfferCatalog {
         }
     }
 
-    /// Deterministically computes the 32-byte catalog hash (CA-12 section 6.1)
+    /// Deterministically computes the 32-byte catalog hash (CA-12 section 6.1 / CA-14)
     pub fn compute_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"randbotd_v1_ca_offer_catalog:");
@@ -166,6 +175,9 @@ impl CaOfferCatalog {
             hasher.update(offer.name.as_bytes());
             hasher.update(offer.key_algorithm.oid().as_bytes());
             hasher.update(offer.ttl_seconds.to_le_bytes());
+            if let Ok(scope_bytes) = serde_json::to_vec(&offer.coverage_scope) {
+                hasher.update(&scope_bytes);
+            }
             for net in &offer.supported_domain_networks {
                 hasher.update([*net as u8]);
             }
@@ -199,7 +211,9 @@ mod tests {
             subject,
             false,
             None,
+            Vec::new(),
             1700000000,
+            false,
             vec![DomainNetworkType::Clearnet, DomainNetworkType::Tor],
         )
         .expect("Valid sample CA")
@@ -215,6 +229,7 @@ mod tests {
             KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::Clearnet],
             DEFAULT_OFFER_TTL_SECONDS,
+            CertificateCoverageScope::SingleFqdn,
             false,
             1700000000,
         )
@@ -239,6 +254,7 @@ mod tests {
             KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::Tor],
             86400,
+            CertificateCoverageScope::SingleFqdn,
             false,
             1700000000,
         )
@@ -255,6 +271,7 @@ mod tests {
             KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::I2P],
             86400,
+            CertificateCoverageScope::SingleFqdn,
             false,
             1700000000,
         )
@@ -277,6 +294,7 @@ mod tests {
             KeyAlgorithm::Ed25519,
             vec![DomainNetworkType::Clearnet],
             3600,
+            CertificateCoverageScope::SingleFqdn,
             false,
             1700000000,
         )
@@ -285,5 +303,55 @@ mod tests {
 
         let hash_with_offer = catalog.compute_hash();
         assert_ne!(hash_empty, hash_with_offer);
+    }
+
+    #[test]
+    fn test_ca_offer_with_coverage_scope() {
+        let ca = sample_ca();
+        let offer_single = CertificateOffer::new(
+            0,
+            ca.ca_id,
+            "Single FQDN".to_string(),
+            KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet],
+            86400,
+            CertificateCoverageScope::SingleFqdn,
+            false,
+            1700000000,
+        )
+        .unwrap();
+        assert_eq!(
+            offer_single.coverage_scope,
+            CertificateCoverageScope::SingleFqdn
+        );
+        assert!(!offer_single.coverage_scope.allows_wildcard());
+
+        let offer_wildcard = CertificateOffer::new(
+            1,
+            ca.ca_id,
+            "Wildcard Apex".to_string(),
+            KeyAlgorithm::Ed25519,
+            vec![DomainNetworkType::Clearnet],
+            86400,
+            CertificateCoverageScope::WildcardApex,
+            false,
+            1700000000,
+        )
+        .unwrap();
+        assert_eq!(
+            offer_wildcard.coverage_scope,
+            CertificateCoverageScope::WildcardApex
+        );
+        assert!(offer_wildcard.coverage_scope.allows_wildcard());
+
+        let mut cat1 = CaOfferCatalog::new(ca.ca_id, 1, 1700000000);
+        cat1.offers.push(offer_single);
+        let hash1 = cat1.compute_hash();
+
+        let mut cat2 = CaOfferCatalog::new(ca.ca_id, 1, 1700000000);
+        cat2.offers.push(offer_wildcard);
+        let hash2 = cat2.compute_hash();
+
+        assert_ne!(hash1, hash2);
     }
 }

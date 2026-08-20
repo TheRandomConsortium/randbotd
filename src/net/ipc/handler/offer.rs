@@ -37,6 +37,7 @@ impl IpcHandler for OfferHandler {
                 key_algorithm,
                 supported_domain_networks,
                 ttl_seconds,
+                coverage_scope,
                 is_draft,
             } => Some(Self::handle_publish_offer(
                 ca_id_hex,
@@ -45,6 +46,7 @@ impl IpcHandler for OfferHandler {
                 *key_algorithm,
                 supported_domain_networks.clone(),
                 *ttl_seconds,
+                coverage_scope.clone(),
                 *is_draft,
                 db,
             )),
@@ -69,6 +71,7 @@ impl OfferHandler {
         key_algorithm: Option<KeyAlgorithm>,
         supported_domain_networks: Option<Vec<DomainNetworkType>>,
         ttl_seconds: Option<u64>,
+        coverage_scope: Option<crate::pki::scope::CertificateCoverageScope>,
         is_draft: Option<bool>,
         db: Option<&Arc<Database>>,
     ) -> IpcResponse {
@@ -133,6 +136,7 @@ impl OfferHandler {
         let networks =
             supported_domain_networks.unwrap_or_else(|| vec![DomainNetworkType::Clearnet]);
         let ttl = ttl_seconds.unwrap_or(crate::pki::offer::DEFAULT_OFFER_TTL_SECONDS);
+        let scope = coverage_scope.unwrap_or_default();
         let is_draft_val = is_draft.unwrap_or(false);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -146,6 +150,7 @@ impl OfferHandler {
             algo,
             networks,
             ttl,
+            scope,
             is_draft_val,
             now,
         ) {

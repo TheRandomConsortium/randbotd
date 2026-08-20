@@ -6,7 +6,7 @@ This document tracks minor maintenance tasks, refactoring needs, infrastructure 
 
 ## 🧹 Active Chores & Technical Debt
 
-*No active chores or technical debt currently logged.*
+* [ ] **`ENTROPY-01` Configurable External Entropy Source URLs**: Allow operators to specify custom or mirror entropy source URLs in `randbotd.toml` (e.g. `[entropy] source_urls = ["https://www.gutenberg.org/dirs/", "https://mirror.gutenberg.org/dirs/"]`) so the driller can dynamically query multiple fallback mirrors if the primary Project Gutenberg server is down.
 
 ---
 
