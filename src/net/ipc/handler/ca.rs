@@ -110,7 +110,19 @@ impl CaHandler {
         let networks = supported_domain_networks
             .cloned()
             .unwrap_or_else(|| vec![DomainNetworkType::Clearnet]);
-        let subtrees = permitted_subtrees.cloned().unwrap_or_default();
+        let subtrees = match permitted_subtrees {
+            Some(s) => s.clone(),
+            None => {
+                if is_intermediate {
+                    crate::pki::scope::CertificateCoverageScope::SubtreeDelegation {
+                        max_path_len: path_len_constraint,
+                    }
+                    .autogenerate_permitted_subtrees(common_name)
+                } else {
+                    Vec::new()
+                }
+            }
+        };
 
         let decl_res = CaDeclaration::new(
             ca_id,

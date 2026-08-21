@@ -42,7 +42,11 @@ pub struct NodeIdentity {
     role: NodeRole,
 }
 
-pub async fn init_node_identity(args: &Cli, base_state_dir: &Path) -> NodeIdentity {
+pub async fn init_node_identity(
+    args: &Cli,
+    base_state_dir: &Path,
+    entropy_sources: Option<&[String]>,
+) -> NodeIdentity {
     println!("\n[NET-01] Initializing Encrypted Node Identity...");
     let key_path = base_state_dir.join("node_key.enc");
     let allow_fallback = args.allow_insecure_machine_id_fallback || args.mode == "interactive";
@@ -86,11 +90,19 @@ pub async fn init_node_identity(args: &Cli, base_state_dir: &Path) -> NodeIdenti
 
         println!("  -> Drilling Project Gutenberg entropy pool for 256-bit mnemonic seed...");
         let allow_entropy_fallback = args.allow_entropy_fallback;
-        let (raw_seed, mnemonic_phrase) = tokio::task::spawn_blocking(move || {
-            GutenbergMnemonic::generate_256bit_phrase(allow_entropy_fallback)
-        })
-        .await
-        .expect("Mnemonic generation task failed");
+        let sources = entropy_sources.map(|s| s.to_vec());
+        let (raw_seed, mnemonic_phrase) =
+            tokio::task::spawn_blocking(move || match sources.as_deref() {
+                Some(urls) if !urls.is_empty() => {
+                    GutenbergMnemonic::generate_256bit_phrase_with_sources(
+                        allow_entropy_fallback,
+                        Some(urls),
+                    )
+                }
+                _ => GutenbergMnemonic::generate_256bit_phrase(allow_entropy_fallback),
+            })
+            .await
+            .expect("Mnemonic generation task failed");
 
         if raw_seed.len() != 32 {
             eprintln!("  -> FATAL ERROR: Invalid seed derived from Gutenberg entropy pool.");

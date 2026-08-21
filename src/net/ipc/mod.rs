@@ -83,6 +83,17 @@ pub enum IpcCommand {
         #[serde(default)]
         http_json: Option<String>,
     },
+    GenerateDomainCert {
+        ca_id_hex: String,
+        offer_id: u32,
+        domain: String,
+        #[serde(default)]
+        subject_pubkey_hex: Option<String>,
+        #[serde(default)]
+        sans: Option<Vec<String>>,
+        #[serde(default)]
+        proof_binding: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -58,4 +58,8 @@ pub struct Cli {
     /// Allow falling back to embedded Crypto Anarchist Manifesto corpus if external Project Gutenberg servers are unreachable
     #[arg(long)]
     pub allow_entropy_fallback: bool,
+
+    /// Operator-defined plaintext entropy source URLs (HTML, CSV, TXT, JSON) (ENTROPY-01)
+    #[arg(long, value_delimiter = ',')]
+    pub entropy_source_urls: Option<Vec<String>>,
 }

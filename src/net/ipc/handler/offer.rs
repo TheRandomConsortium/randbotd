@@ -5,6 +5,7 @@ use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
+use crate::pki::cert::{X509Certificate, X509CertificateBuilder};
 use crate::pki::offer::CertificateOffer;
 use crate::proof::DomainNetworkType;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
@@ -57,6 +58,22 @@ impl IpcHandler for OfferHandler {
             IpcCommand::ListOffers { ca_id_hex } => {
                 Some(Self::handle_list_offers(ca_id_hex.as_deref(), db))
             }
+            IpcCommand::GenerateDomainCert {
+                ca_id_hex,
+                offer_id,
+                domain,
+                subject_pubkey_hex,
+                sans,
+                proof_binding,
+            } => Some(Self::handle_generate_domain_cert(
+                ca_id_hex,
+                *offer_id,
+                domain,
+                subject_pubkey_hex.as_deref(),
+                sans.as_ref(),
+                proof_binding.as_deref(),
+                db,
+            )),
             _ => None,
         }
     }
@@ -171,13 +188,32 @@ impl OfferHandler {
 
         let _ = database.get_catalog_for_ca(&ca_id);
 
+        let root_cert_res: Result<X509Certificate, String> =
+            X509CertificateBuilder::build_root_ca_certificate(
+                &ca,
+                &keypair,
+                offer.ttl_seconds,
+                now,
+            );
+
         match database.insert_offer(offer.clone()) {
-            Ok((oid, cat_hash)) => IpcResponse::Ok {
-                message: format!(
-                    "Offer `{}` (ID {}) successfully published for CA `{}` (Algorithm: {}, Catalog Hash: {})",
-                    offer.name, oid, ca_id_hex, offer.key_algorithm.name(), bytes32_to_hex(&cat_hash)
-                ),
-            },
+            Ok((oid, cat_hash)) => {
+                let root_cert_notice = match root_cert_res {
+                    Ok(rc) => {
+                        format!(
+                            " | Root CA Cert Generated (Serial: {})",
+                            rc.serial_number.to_colon_hex()
+                        )
+                    }
+                    Err(e) => format!(" | Root CA Cert Error: {}", e),
+                };
+                IpcResponse::Ok {
+                    message: format!(
+                        "Offer `{}` (ID {}) successfully published for CA `{}` (Algorithm: {}, Catalog Hash: {}){}",
+                        offer.name, oid, ca_id_hex, offer.key_algorithm.name(), bytes32_to_hex(&cat_hash), root_cert_notice
+                    ),
+                }
+            }
             Err(e) => IpcResponse::Error { reason: e },
         }
     }
@@ -238,6 +274,144 @@ impl OfferHandler {
             Err(e) => IpcResponse::Error {
                 reason: format!("Failed to serialize offers: {}", e),
             },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn handle_generate_domain_cert(
+        ca_id_hex: &str,
+        offer_id: u32,
+        domain: &str,
+        subject_pubkey_hex: Option<&str>,
+        sans: Option<&Vec<String>>,
+        proof_binding: Option<&str>,
+        db: Option<&Arc<Database>>,
+    ) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is unavailable".to_string(),
+                }
+            }
+        };
+        let ca_id = match hex_to_bytes32(ca_id_hex) {
+            Ok(b) => b,
+            Err(e) => return IpcResponse::Error { reason: e },
+        };
+        let ca = match database.get_ca(&ca_id) {
+            Some(c) => c,
+            None => {
+                return IpcResponse::Error {
+                    reason: format!("CA `{}` does not exist in database", ca_id_hex),
+                }
+            }
+        };
+        let offer = match database.get_offer(&ca_id, offer_id) {
+            Some(o) => o,
+            None => {
+                return IpcResponse::Error {
+                    reason: format!("Offer ID {} not found for CA `{}`", offer_id, ca_id_hex),
+                }
+            }
+        };
+
+        // Validate domain against intermediate CA subtree constraints (CA-14)
+        if ca.is_intermediate
+            && !ca.permitted_subtrees.is_empty()
+            && !ca.is_domain_permitted(domain)
+        {
+            return IpcResponse::Error {
+                reason: format!(
+                    "Domain `{}` violates permitted subtrees ({:?}) of intermediate CA",
+                    domain, ca.permitted_subtrees
+                ),
+            };
+        }
+
+        // Validate or autogenerate SANs
+        let resolved_sans = if let Some(custom_sans) = sans {
+            if custom_sans.len() as u32 > offer.coverage_scope.max_sans() {
+                return IpcResponse::Error {
+                    reason: format!(
+                        "Number of SANs ({}) exceeds maximum allowed ({}) under coverage scope {:?}",
+                        custom_sans.len(),
+                        offer.coverage_scope.max_sans(),
+                        offer.coverage_scope
+                    ),
+                };
+            }
+            for s in custom_sans {
+                if s.starts_with("*.") && !offer.coverage_scope.allows_wildcard() {
+                    return IpcResponse::Error {
+                        reason: format!(
+                            "Wildcard SAN `{}` not permitted under coverage scope {:?}",
+                            s, offer.coverage_scope
+                        ),
+                    };
+                }
+                if ca.is_intermediate
+                    && !ca.permitted_subtrees.is_empty()
+                    && !ca.is_domain_permitted(s)
+                {
+                    return IpcResponse::Error {
+                        reason: format!(
+                            "SAN `{}` violates permitted subtrees ({:?}) of intermediate CA",
+                            s, ca.permitted_subtrees
+                        ),
+                    };
+                }
+            }
+            custom_sans.clone()
+        } else {
+            offer.coverage_scope.autogenerate_sans(domain)
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Subject public key bytes
+        let subject_pubkey = match subject_pubkey_hex {
+            Some(hex_str) => match hex::decode(hex_str.trim().trim_start_matches("0x")) {
+                Ok(b) => b,
+                Err(e) => {
+                    return IpcResponse::Error {
+                        reason: format!("Invalid subject_pubkey_hex: {}", e),
+                    }
+                }
+            },
+            None => match crate::crypto::agility::CaKeyPair::generate(offer.key_algorithm) {
+                Ok(kp) => kp.public_key_bytes.clone(),
+                Err(e) => return IpcResponse::Error { reason: e },
+            },
+        };
+
+        // Generate issuing CA keypair (for signing leaf cert)
+        let ca_keypair = match crate::crypto::agility::CaKeyPair::generate(offer.key_algorithm) {
+            Ok(kp) => kp,
+            Err(e) => return IpcResponse::Error { reason: e },
+        };
+
+        match X509CertificateBuilder::build_domain_leaf_certificate(
+            &ca,
+            &ca_keypair,
+            domain,
+            offer.key_algorithm,
+            &subject_pubkey,
+            resolved_sans,
+            offer.ttl_seconds,
+            now,
+            proof_binding,
+        ) {
+            Ok(cert) => match serde_json::to_string(&cert) {
+                Ok(json_str) => IpcResponse::Ok { message: json_str },
+                Err(e) => IpcResponse::Error {
+                    reason: format!("Failed to serialize issued certificate: {}", e),
+                },
+            },
+            Err(e) => IpcResponse::Error { reason: e },
         }
     }
 }

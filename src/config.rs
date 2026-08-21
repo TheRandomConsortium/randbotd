@@ -88,12 +88,14 @@ pub struct StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntropyConfig {
     pub allow_fallback: Option<bool>,
+    pub source_urls: Option<Vec<String>>,
 }
 
 impl Default for EntropyConfig {
     fn default() -> Self {
         Self {
             allow_fallback: Some(false),
+            source_urls: None,
         }
     }
 }
@@ -194,6 +196,10 @@ hns_recursive_port = 53492
 hns_dns_mode = "udp"
 hns_dns_target = "daemon"
 upstream_dns_resolver = "9.9.9.9:53"
+
+[entropy]
+allow_fallback = true
+source_urls = ["http://example.org/corpus.txt", "https://example.org/dict.csv"]
 "#;
         let config: DaemonConfig = toml::from_str(raw_toml).expect("Failed to parse TOML");
         assert_eq!(config.network.port, Some(43211));
@@ -209,6 +215,14 @@ upstream_dns_resolver = "9.9.9.9:53"
         assert_eq!(
             config.handshake.upstream_dns_resolver,
             Some("9.9.9.9:53".to_string())
+        );
+        assert_eq!(config.entropy.allow_fallback, Some(true));
+        assert_eq!(
+            config.entropy.source_urls,
+            Some(vec![
+                "http://example.org/corpus.txt".to_string(),
+                "https://example.org/dict.csv".to_string()
+            ])
         );
     }
 

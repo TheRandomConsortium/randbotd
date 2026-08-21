@@ -144,7 +144,12 @@ async fn main() {
     }
 
     // 2. Node Identity Key Loading / Generation / Recovery
-    let identity = init_node_identity(&args, &base_state_dir).await;
+    let entropy_urls = args
+        .entropy_source_urls
+        .as_ref()
+        .or(daemon_cfg.entropy.source_urls.as_ref())
+        .map(|v| v.as_slice());
+    let identity = init_node_identity(&args, &base_state_dir, entropy_urls).await;
 
     println!(
         "  -> Node Public Key: {:02x?} [Role: {:?}, Voter: {}]",

@@ -324,3 +324,114 @@ async fn test_ipc_multi_tier_offer_catalog_and_persistence_roundtrip() {
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[tokio::test]
+async fn test_ipc_generate_domain_cert_testing_endpoint() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "randbotd_ipc_gencert_test_{}",
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let socket_path = temp_dir.join("randbotd.sock");
+
+    let phonebook = test_phonebook();
+    let db = Arc::new(Database::open(&temp_dir).unwrap());
+    let server = IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+    let handle = server.spawn();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // 1. Create a Root CA
+    let stream = UnixStream::connect(&socket_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let ca_cmd = IpcCommand::PublishCa {
+        ca_id_hex: None,
+        common_name: "Cert Issuer Root CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("ES".to_string()),
+        email: None,
+        is_intermediate: false,
+        path_len_constraint: None,
+        is_draft: None,
+        supported_domain_networks: Some(vec![DomainNetworkType::Clearnet]),
+        permitted_subtrees: None,
+    };
+    writer
+        .write_all((serde_json::to_string(&ca_cmd).unwrap() + "\n").as_bytes())
+        .await
+        .unwrap();
+
+    let mut buf_reader = BufReader::new(reader);
+    let mut ca_resp_line = String::new();
+    buf_reader.read_line(&mut ca_resp_line).await.unwrap();
+    let ca_resp: IpcResponse = serde_json::from_str(&ca_resp_line).unwrap();
+    let ca_id_hex = match ca_resp {
+        IpcResponse::Ok { message } => message.split('`').nth(3).unwrap().to_string(),
+        _ => panic!("Expected CA publish Ok"),
+    };
+
+    // 2. Publish Offer (generating Root CA Cert)
+    let stream_offer = UnixStream::connect(&socket_path).await.unwrap();
+    let (r_o, mut w_o) = stream_offer.into_split();
+    let offer_cmd = IpcCommand::PublishOffer {
+        ca_id_hex: ca_id_hex.clone(),
+        offer_id: Some(0),
+        name: "Clearnet Wildcard Tier".to_string(),
+        key_algorithm: Some(KeyAlgorithm::Ed25519),
+        supported_domain_networks: Some(vec![DomainNetworkType::Clearnet]),
+        ttl_seconds: Some(7_776_000),
+        coverage_scope: Some(crate::pki::scope::CertificateCoverageScope::WildcardApex),
+        is_draft: None,
+    };
+    w_o.write_all((serde_json::to_string(&offer_cmd).unwrap() + "\n").as_bytes())
+        .await
+        .unwrap();
+    let mut br_o = BufReader::new(r_o);
+    let mut offer_resp_line = String::new();
+    br_o.read_line(&mut offer_resp_line).await.unwrap();
+    assert!(offer_resp_line.contains("Root CA Cert Generated"));
+
+    // 3. Issue Leaf Domain Certificate via testing endpoint
+    let stream_cert = UnixStream::connect(&socket_path).await.unwrap();
+    let (r_c, mut w_c) = stream_cert.into_split();
+    let gen_cert_cmd = IpcCommand::GenerateDomainCert {
+        ca_id_hex: ca_id_hex.clone(),
+        offer_id: 0,
+        domain: "therandomconsortium.org".to_string(),
+        subject_pubkey_hex: None,
+        sans: None,
+        proof_binding: Some("PROOF_OF_CONTROL_TXT_RECORD_HASH".to_string()),
+    };
+    w_c.write_all((serde_json::to_string(&gen_cert_cmd).unwrap() + "\n").as_bytes())
+        .await
+        .unwrap();
+    let mut br_c = BufReader::new(r_c);
+    let mut cert_resp_line = String::new();
+    br_c.read_line(&mut cert_resp_line).await.unwrap();
+
+    let cert_resp: IpcResponse = serde_json::from_str(&cert_resp_line).unwrap();
+    match cert_resp {
+        IpcResponse::Ok { message } => {
+            let cert: crate::pki::cert::X509Certificate = serde_json::from_str(&message).unwrap();
+            assert_eq!(cert.subject.common_name, "therandomconsortium.org");
+            assert_eq!(
+                cert.sans,
+                vec![
+                    "therandomconsortium.org".to_string(),
+                    "*.therandomconsortium.org".to_string()
+                ]
+            );
+            assert!(cert
+                .pem_certificate
+                .starts_with("-----BEGIN CERTIFICATE-----"));
+            assert!(!cert.der_bytes.is_empty());
+        }
+        IpcResponse::Error { reason } => panic!("GenerateDomainCert error: {}", reason),
+    }
+
+    handle.abort();
+    let _ = std::fs::remove_dir_all(temp_dir);
+}

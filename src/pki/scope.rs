@@ -20,14 +20,6 @@ pub enum CertificateCoverageScope {
     SubtreeDelegation { max_path_len: Option<u32> },
 }
 
-// ============================================================================
-// ⚠️ WARNING: FUTURE CERTIFICATE BUILDING INFRASTRUCTURE (CA-05)
-// ============================================================================
-// The constructor and validation helper functions below are maintained as foundational
-// infrastructure for future certificate building. This should stop being dead code
-// by CA-05 (X.509 Certificate Builder) or deleted.
-// ============================================================================
-#[allow(dead_code)]
 impl CertificateCoverageScope {
     /// Autogenerates the permitted subtrees for X.509 Name Constraints (RFC 5280 §4.2.1.10) from the proven domain
     pub fn autogenerate_permitted_subtrees(&self, proven_domain: &str) -> Vec<String> {

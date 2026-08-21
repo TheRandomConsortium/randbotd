@@ -178,9 +178,6 @@ impl CaDeclaration {
     }
 
     /// Checks if a domain is permitted under this CA's subtree name constraints.
-    // WARNING: FUTURE CERTIFICATE ISSUANCE INFRASTRUCTURE (CA-05 / CA-14).
-    // This should stop being dead code by CA-05 or deleted.
-    #[allow(dead_code)]
     pub fn is_domain_permitted(&self, domain: &str) -> bool {
         crate::pki::scope::CertificateCoverageScope::is_domain_in_permitted_subtrees(
             domain,
