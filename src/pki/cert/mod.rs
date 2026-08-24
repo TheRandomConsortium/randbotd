@@ -26,6 +26,24 @@ pub const OID_SUBJECT_ALT_NAME: &str = "2.5.29.17";
 pub const OID_NAME_CONSTRAINTS: &str = "2.5.29.30";
 pub const OID_AUTHORITY_KEY_IDENTIFIER: &str = "2.5.29.35";
 pub const OID_SUBJECT_KEY_IDENTIFIER: &str = "2.5.29.14";
+pub const OID_AUTHORITY_INFO_ACCESS: &str = "1.3.6.1.5.5.7.1.1";
+
+/// Standard Authority Information Access (AIA) Access Method OIDs per RFC 5280 §4.2.2.1
+pub const OID_AD_CA_ISSUERS: &str = "1.3.6.1.5.5.7.48.2";
+pub const OID_AD_OCSP: &str = "1.3.6.1.5.5.7.48.1";
+
+/// Standard criticality flag for RFC 5280 Authority Information Access extension (CA-15)
+pub const AIA_EXTENSION_CRITICAL: bool = false;
+
+/// Returns the standard randbotd P2P URI for resolving parent CA certificate chains (caIssuers) per CA-15
+pub fn p2p_aia_ca_issuers_uri(ca_id: &[u8; 32]) -> String {
+    format!("randbotd://ca/{}/cert", hex::encode(ca_id))
+}
+
+/// Returns the standard randbotd P2P URI for checking real-time P2P OCSP revocation status per CA-15
+pub fn p2p_aia_ocsp_uri(ca_id: &[u8; 32]) -> String {
+    format!("randbotd://ca/{}/ocsp", hex::encode(ca_id))
+}
 
 /// Standard Extended Key Usage (EKU) Purpose OIDs per RFC 5280 §4.2.1.12
 pub const OID_EKU_SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
@@ -88,5 +106,25 @@ mod tests {
     fn test_ca_14_name_constraints_constants() {
         assert_eq!(OID_NAME_CONSTRAINTS, "2.5.29.30");
         const { assert!(NAME_CONSTRAINTS_CRITICAL) };
+    }
+
+    #[test]
+    fn test_ca_15_authority_info_access_constants_and_helpers() {
+        assert_eq!(OID_AUTHORITY_INFO_ACCESS, "1.3.6.1.5.5.7.1.1");
+        assert_eq!(OID_AD_CA_ISSUERS, "1.3.6.1.5.5.7.48.2");
+        assert_eq!(OID_AD_OCSP, "1.3.6.1.5.5.7.48.1");
+        const { assert!(!AIA_EXTENSION_CRITICAL) };
+
+        let dummy_ca_id = [0xabu8; 32];
+        let ca_issuers = p2p_aia_ca_issuers_uri(&dummy_ca_id);
+        let ocsp = p2p_aia_ocsp_uri(&dummy_ca_id);
+
+        assert!(ca_issuers.starts_with("randbotd://ca/"));
+        assert!(ca_issuers.ends_with("/cert"));
+        assert!(ca_issuers.contains(&hex::encode(dummy_ca_id)));
+
+        assert!(ocsp.starts_with("randbotd://ca/"));
+        assert!(ocsp.ends_with("/ocsp"));
+        assert!(ocsp.contains(&hex::encode(dummy_ca_id)));
     }
 }

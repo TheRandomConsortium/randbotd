@@ -213,6 +213,37 @@ pub fn encode_domain_proof_extension(proof_data: &str) -> Vec<u8> {
     encode_extension(OID_DOMAIN_PROOF_BINDING, false, &ext_val)
 }
 
+/// Encodes an AccessDescription SEQUENCE (RFC 5280 §4.2.2.1)
+pub fn encode_access_description(access_method_oid: &str, uri: &str) -> Vec<u8> {
+    let mut seq = Vec::new();
+    seq.extend_from_slice(&der_oid(access_method_oid).unwrap());
+    seq.extend_from_slice(&der_tlv(0x86, uri.as_bytes()));
+    der_sequence(&seq)
+}
+
+/// Encodes Authority Information Access (AIA) extension (1.3.6.1.5.5.7.1.1) (CA-15)
+pub fn encode_authority_info_access(
+    ca_issuers_uri: Option<&str>,
+    ocsp_uri: Option<&str>,
+) -> Option<Vec<u8>> {
+    let mut descriptions = Vec::new();
+    if let Some(uri) = ca_issuers_uri {
+        descriptions.extend_from_slice(&encode_access_description(OID_AD_CA_ISSUERS, uri));
+    }
+    if let Some(uri) = ocsp_uri {
+        descriptions.extend_from_slice(&encode_access_description(OID_AD_OCSP, uri));
+    }
+    if descriptions.is_empty() {
+        return None;
+    }
+    let ext_val = der_sequence(&descriptions);
+    Some(encode_extension(
+        OID_AUTHORITY_INFO_ACCESS,
+        AIA_EXTENSION_CRITICAL,
+        &ext_val,
+    ))
+}
+
 /// Encodes TBSCertificate structure (RFC 5280 §4.1)
 #[allow(clippy::too_many_arguments)]
 pub fn encode_tbs_certificate(
@@ -263,4 +294,41 @@ pub fn encode_signed_certificate(
     cert.extend_from_slice(&encode_algorithm_identifier(sig_algo));
     cert.extend_from_slice(&der_bit_string(signature_bytes, 0));
     Ok(der_sequence(&cert))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_access_description() {
+        let uri = "randbotd://ca/aabbcc/cert";
+        let desc = encode_access_description(OID_AD_CA_ISSUERS, uri);
+        assert!(!desc.is_empty());
+        assert_eq!(desc[0], 0x30); // SEQUENCE
+        let desc_str = String::from_utf8_lossy(&desc);
+        assert!(desc_str.contains(uri));
+    }
+
+    #[test]
+    fn test_encode_authority_info_access() {
+        let ca_issuers = "randbotd://ca/112233/cert";
+        let ocsp = "randbotd://ca/112233/ocsp";
+
+        // Both URIs
+        let aia = encode_authority_info_access(Some(ca_issuers), Some(ocsp)).unwrap();
+        assert_eq!(aia[0], 0x30); // SEQUENCE for Extension
+        let aia_str = String::from_utf8_lossy(&aia);
+        assert!(aia_str.contains(ca_issuers));
+        assert!(aia_str.contains(ocsp));
+
+        // Single URI
+        let aia_ca_only = encode_authority_info_access(Some(ca_issuers), None).unwrap();
+        let aia_ca_str = String::from_utf8_lossy(&aia_ca_only);
+        assert!(aia_ca_str.contains(ca_issuers));
+        assert!(!aia_ca_str.contains(ocsp));
+
+        // None
+        assert!(encode_authority_info_access(None, None).is_none());
+    }
 }

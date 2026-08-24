@@ -56,6 +56,12 @@ impl X509CertificateBuilder {
         }
         // 6. WoT Critical Extension (CA-10)
         extensions.extend_from_slice(&encode_wot_extension(WOT_EXTENSION_UUID));
+        // 7. AIA P2P Swarm Extension (CA-15, RFC 5280, non-critical)
+        let ca_issuers = p2p_aia_ca_issuers_uri(&ca_decl.ca_id);
+        let ocsp = p2p_aia_ocsp_uri(&ca_decl.ca_id);
+        if let Some(aia) = encode_authority_info_access(Some(&ca_issuers), Some(&ocsp)) {
+            extensions.extend_from_slice(&aia);
+        }
 
         let tbs_der = encode_tbs_certificate(
             &serial,
@@ -137,6 +143,12 @@ impl X509CertificateBuilder {
         // 8. Optional Domain Proof Binding (CA-03)
         if let Some(proof) = proof_binding {
             extensions.extend_from_slice(&encode_domain_proof_extension(proof));
+        }
+        // 9. AIA P2P Swarm Extension (CA-15, RFC 5280, non-critical)
+        let ca_issuers = p2p_aia_ca_issuers_uri(&ca_decl.ca_id);
+        let ocsp = p2p_aia_ocsp_uri(&ca_decl.ca_id);
+        if let Some(aia) = encode_authority_info_access(Some(&ca_issuers), Some(&ocsp)) {
+            extensions.extend_from_slice(&aia);
         }
 
         let tbs_der = encode_tbs_certificate(
@@ -301,5 +313,67 @@ mod tests {
         assert!(cert_ml
             .pem_certificate
             .contains("-----BEGIN CERTIFICATE-----"));
+    }
+
+    #[test]
+    fn test_ca_15_root_and_leaf_aia_extension_embedding() {
+        let subject = CaSubjectMetadata {
+            common_name: "AIA Swarm Root CA".to_string(),
+            organization: Some("AIA Swarm".to_string()),
+            organizational_unit: None,
+            locality: None,
+            state_or_province: None,
+            country: Some("ES".to_string()),
+            email: None,
+        };
+        let ca_id = compute_ca_id(&subject.common_name, b"aia_root_key");
+        let decl = CaDeclaration::new(
+            ca_id,
+            subject.clone(),
+            subject,
+            false,
+            None,
+            Vec::new(),
+            1700000000,
+            false,
+            vec![crate::proof::DomainNetworkType::Clearnet],
+        )
+        .unwrap();
+
+        let ca_keypair = CaKeyPair::generate(KeyAlgorithm::Ed25519).unwrap();
+        let root_cert = X509CertificateBuilder::build_root_ca_certificate(
+            &decl,
+            &ca_keypair,
+            31_536_000,
+            1700000000,
+        )
+        .unwrap();
+
+        let expected_ca_issuers = p2p_aia_ca_issuers_uri(&ca_id);
+        let expected_ocsp = p2p_aia_ocsp_uri(&ca_id);
+
+        // Verify DER contains the AIA P2P Swarm URIs
+        let root_der_str = String::from_utf8_lossy(&root_cert.der_bytes);
+        assert!(root_der_str.contains(&expected_ca_issuers));
+        assert!(root_der_str.contains(&expected_ocsp));
+
+        // Leaf cert verification
+        let leaf_keypair = CaKeyPair::generate(KeyAlgorithm::Ed25519).unwrap();
+        let leaf_cert = X509CertificateBuilder::build_domain_leaf_certificate(
+            &decl,
+            &ca_keypair,
+            "aia-test.example",
+            KeyAlgorithm::Ed25519,
+            &leaf_keypair.public_key_bytes,
+            vec!["aia-test.example".to_string()],
+            86400,
+            1700000000,
+            None,
+        )
+        .unwrap();
+
+        let leaf_der_str = String::from_utf8_lossy(&leaf_cert.der_bytes);
+        assert!(leaf_der_str.contains(&expected_ca_issuers));
+        assert!(leaf_der_str.contains(&expected_ocsp));
     }
 }
