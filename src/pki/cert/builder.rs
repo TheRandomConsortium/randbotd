@@ -62,6 +62,9 @@ impl X509CertificateBuilder {
         if let Some(aia) = encode_authority_info_access(Some(&ca_issuers), Some(&ocsp)) {
             extensions.extend_from_slice(&aia);
         }
+        // 8. CRL Distribution Points (CDP) P2P Swarm Extension (CA-04/07)
+        let cdp_uri = p2p_cdp_crl_uri(&ca_decl.ca_id);
+        extensions.extend_from_slice(&encode_crl_distribution_points(&cdp_uri));
 
         let tbs_der = encode_tbs_certificate(
             &serial,
@@ -150,6 +153,9 @@ impl X509CertificateBuilder {
         if let Some(aia) = encode_authority_info_access(Some(&ca_issuers), Some(&ocsp)) {
             extensions.extend_from_slice(&aia);
         }
+        // 10. CRL Distribution Points (CDP) P2P Swarm Extension (CA-04/07)
+        let cdp_uri = p2p_cdp_crl_uri(&ca_decl.ca_id);
+        extensions.extend_from_slice(&encode_crl_distribution_points(&cdp_uri));
 
         let tbs_der = encode_tbs_certificate(
             &serial,
@@ -175,6 +181,87 @@ impl X509CertificateBuilder {
             key_algorithm: ca_keypair.algorithm,
             is_ca: false,
             sans,
+            der_bytes: cert_der,
+            pem_certificate: pem,
+        })
+    }
+
+    /// Builds and signs an X.509 v3 Intermediate CA Certificate issued by a parent CA (CA-04/05)
+    // Allowed dead code: Intermediary CAs will be operationalized under CA-11 (Distributed Custodian Swarm)
+    #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_intermediate_ca_certificate(
+        parent_ca_decl: &CaDeclaration,
+        parent_ca_keypair: &CaKeyPair,
+        intermediate_decl: &CaDeclaration,
+        intermediate_pubkey_bytes: &[u8],
+        intermediate_algo: KeyAlgorithm,
+        ttl_seconds: u64,
+        current_time: u64,
+    ) -> Result<X509Certificate, String> {
+        let serial = CertificateSerialNumber::generate();
+        let not_before = current_time;
+        let not_after = current_time.saturating_add(ttl_seconds);
+
+        let spki_bytes =
+            encode_subject_public_key_info(intermediate_algo, intermediate_pubkey_bytes);
+        let issuer_dn = encode_distinguished_name(&parent_ca_decl.subject);
+        let subject_dn = encode_distinguished_name(&intermediate_decl.subject);
+
+        let mut extensions = Vec::new();
+        // 1. Basic Constraints (critical = true, cA = true)
+        extensions.extend_from_slice(&encode_basic_constraints(
+            true,
+            intermediate_decl.path_len_constraint,
+        ));
+        // 2. Key Usage (critical = true, keyCertSign | cRLSign | digitalSignature)
+        extensions.extend_from_slice(&encode_key_usage(true));
+        // 3. SKI (non-critical)
+        extensions.extend_from_slice(&encode_ski(intermediate_pubkey_bytes));
+        // 4. AKI (non-critical)
+        extensions.extend_from_slice(&encode_aki(&parent_ca_keypair.public_key_bytes));
+        // 5. Name Constraints if intermediate with permitted_subtrees (CA-14)
+        if !intermediate_decl.permitted_subtrees.is_empty() {
+            extensions.extend_from_slice(&encode_name_constraints(
+                &intermediate_decl.permitted_subtrees,
+            ));
+        }
+        // 6. WoT Critical Extension (CA-10)
+        extensions.extend_from_slice(&encode_wot_extension(WOT_EXTENSION_UUID));
+        // 7. AIA P2P Swarm Extension (CA-15)
+        let ca_issuers = p2p_aia_ca_issuers_uri(&parent_ca_decl.ca_id);
+        let ocsp = p2p_aia_ocsp_uri(&parent_ca_decl.ca_id);
+        if let Some(aia) = encode_authority_info_access(Some(&ca_issuers), Some(&ocsp)) {
+            extensions.extend_from_slice(&aia);
+        }
+        // 8. CRL Distribution Points (CDP) P2P Swarm Extension (CA-04/07)
+        let cdp_uri = p2p_cdp_crl_uri(&parent_ca_decl.ca_id);
+        extensions.extend_from_slice(&encode_crl_distribution_points(&cdp_uri));
+
+        let tbs_der = encode_tbs_certificate(
+            &serial,
+            parent_ca_keypair.algorithm,
+            &issuer_dn,
+            not_before,
+            not_after,
+            &subject_dn,
+            &spki_bytes,
+            &extensions,
+        )?;
+
+        let sig = parent_ca_keypair.sign(&tbs_der)?;
+        let cert_der = encode_signed_certificate(&tbs_der, parent_ca_keypair.algorithm, &sig)?;
+        let pem = to_pem(&cert_der, "CERTIFICATE");
+
+        Ok(X509Certificate {
+            serial_number: serial,
+            issuer: parent_ca_decl.subject.clone(),
+            subject: intermediate_decl.subject.clone(),
+            not_before,
+            not_after,
+            key_algorithm: intermediate_algo,
+            is_ca: true,
+            sans: Vec::new(),
             der_bytes: cert_der,
             pem_certificate: pem,
         })

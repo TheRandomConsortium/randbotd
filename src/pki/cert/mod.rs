@@ -35,6 +35,12 @@ pub const OID_AD_OCSP: &str = "1.3.6.1.5.5.7.48.1";
 /// Standard criticality flag for RFC 5280 Authority Information Access extension (CA-15)
 pub const AIA_EXTENSION_CRITICAL: bool = false;
 
+/// Standard RFC 5280 CRL Distribution Points (CDP) OID (CA-04/07)
+pub const OID_CRL_DISTRIBUTION_POINTS: &str = "2.5.29.31";
+
+/// Standard criticality flag for RFC 5280 CRL Distribution Points extension (CA-04/07)
+pub const CDP_EXTENSION_CRITICAL: bool = false;
+
 /// Returns the standard randbotd P2P URI for resolving parent CA certificate chains (caIssuers) per CA-15
 pub fn p2p_aia_ca_issuers_uri(ca_id: &[u8; 32]) -> String {
     format!("randbotd://ca/{}/cert", hex::encode(ca_id))
@@ -43,6 +49,11 @@ pub fn p2p_aia_ca_issuers_uri(ca_id: &[u8; 32]) -> String {
 /// Returns the standard randbotd P2P URI for checking real-time P2P OCSP revocation status per CA-15
 pub fn p2p_aia_ocsp_uri(ca_id: &[u8; 32]) -> String {
     format!("randbotd://ca/{}/ocsp", hex::encode(ca_id))
+}
+
+/// Returns the standard randbotd P2P URI for fetching CA Certificate Revocation Lists (CRL) per CA-04/07
+pub fn p2p_cdp_crl_uri(ca_id: &[u8; 32]) -> String {
+    format!("randbotd://ca/{}/crl", hex::encode(ca_id))
 }
 
 /// Standard Extended Key Usage (EKU) Purpose OIDs per RFC 5280 §4.2.1.12

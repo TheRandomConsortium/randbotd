@@ -218,7 +218,28 @@ impl CaKeyPair {
             }
         }
     }
+}
 
+/// Verifies digital signature given algorithm, public key bytes, message, and signature
+pub fn verify_signature_by_algorithm(
+    algorithm: KeyAlgorithm,
+    public_key_bytes: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), String> {
+    let dummy = CaKeyPair {
+        algorithm,
+        public_key_bytes: public_key_bytes.to_vec(),
+        private_key_bytes: Vec::new(),
+    };
+    match dummy.verify(message, signature) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Digital signature verification failed".to_string()),
+        Err(e) => Err(e),
+    }
+}
+
+impl CaKeyPair {
     /// Encrypts and persists keypair to disk using Argon2id KDF + ChaCha20-Poly1305 AEAD bound to masterpass
     pub fn save_encrypted_key_file(
         &self,

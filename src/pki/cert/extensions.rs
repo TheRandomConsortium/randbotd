@@ -244,6 +244,21 @@ pub fn encode_authority_info_access(
     ))
 }
 
+/// Encodes CRL Distribution Points (CDP) extension (2.5.29.31) (RFC 5280 §4.2.1.13, CA-04/07)
+pub fn encode_crl_distribution_points(crl_uri: &str) -> Vec<u8> {
+    let gn_uri = der_tlv(0x86, crl_uri.as_bytes());
+    let general_names = der_sequence(&gn_uri);
+    let full_name = der_tlv(0xA0, &general_names);
+    let dist_point_name = der_tlv(0xA0, &full_name);
+    let dist_point = der_sequence(&dist_point_name);
+    let ext_val = der_sequence(&dist_point);
+    encode_extension(
+        OID_CRL_DISTRIBUTION_POINTS,
+        CDP_EXTENSION_CRITICAL,
+        &ext_val,
+    )
+}
+
 /// Encodes TBSCertificate structure (RFC 5280 §4.1)
 #[allow(clippy::too_many_arguments)]
 pub fn encode_tbs_certificate(
@@ -330,5 +345,15 @@ mod tests {
 
         // None
         assert!(encode_authority_info_access(None, None).is_none());
+    }
+
+    #[test]
+    fn test_encode_crl_distribution_points() {
+        let uri = "randbotd://ca/aabbccddee/crl";
+        let cdp = encode_crl_distribution_points(uri);
+        assert!(!cdp.is_empty());
+        assert_eq!(cdp[0], 0x30); // SEQUENCE for Extension
+        let cdp_str = String::from_utf8_lossy(&cdp);
+        assert!(cdp_str.contains(uri));
     }
 }

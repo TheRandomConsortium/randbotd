@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
 pub mod ca_subtable;
+pub mod cert_subtable;
 pub mod merkle;
 pub mod offer_subtable;
 pub mod sync;
@@ -25,6 +26,8 @@ pub struct Database {
     sync_offset_file_path: PathBuf,
     ca_file_path: PathBuf,
     offer_file_path: PathBuf,
+    chain_file_path: PathBuf,
+    crl_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
@@ -32,6 +35,9 @@ pub struct Database {
     ca_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::ca::CaDeclaration>>,
     offer_store:
         RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::offer::CertificateOffer>>>,
+    chain_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::chain::CertificateChain>>,
+    crl_store:
+        RwLock<std::collections::HashMap<[u8; 32], crate::pki::crl::CertificateRevocationList>>,
 }
 
 #[allow(dead_code)]
@@ -47,6 +53,8 @@ impl Database {
         let sync_offset_file_path = state_dir.join("sync_offset.state");
         let ca_file_path = state_dir.join("ca_declarations.json");
         let offer_file_path = state_dir.join("ca_offers.json");
+        let chain_file_path = state_dir.join("cert_chains.json");
+        let crl_file_path = state_dir.join("crls.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -126,17 +134,61 @@ impl Database {
             std::collections::HashMap::new()
         };
 
+        let loaded_chains: std::collections::HashMap<
+            [u8; 32],
+            crate::pki::chain::CertificateChain,
+        > = if chain_file_path.exists() {
+            let content = std::fs::read_to_string(&chain_file_path)
+                .map_err(|e| format!("Failed to read cert_chains file: {}", e))?;
+            let hex_map: std::collections::HashMap<String, crate::pki::chain::CertificateChain> =
+                serde_json::from_str(&content).unwrap_or_default();
+            let mut map = std::collections::HashMap::new();
+            for (hex_key, chain) in hex_map {
+                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
+                    map.insert(bytes, chain);
+                }
+            }
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        let loaded_crls: std::collections::HashMap<
+            [u8; 32],
+            crate::pki::crl::CertificateRevocationList,
+        > = if crl_file_path.exists() {
+            let content = std::fs::read_to_string(&crl_file_path)
+                .map_err(|e| format!("Failed to read crls file: {}", e))?;
+            let hex_map: std::collections::HashMap<
+                String,
+                crate::pki::crl::CertificateRevocationList,
+            > = serde_json::from_str(&content).unwrap_or_default();
+            let mut map = std::collections::HashMap::new();
+            for (hex_key, crl) in hex_map {
+                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
+                    map.insert(bytes, crl);
+                }
+            }
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
+
         Ok(Self {
             db_file_path,
             sync_offset_file_path,
             ca_file_path,
             offer_file_path,
+            chain_file_path,
+            crl_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
             merkle_cache: RwLock::new(std::collections::HashMap::new()),
             ca_store: RwLock::new(loaded_cas),
             offer_store: RwLock::new(loaded_offers),
+            chain_store: RwLock::new(loaded_chains),
+            crl_store: RwLock::new(loaded_crls),
         })
     }
 

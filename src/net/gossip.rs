@@ -8,6 +8,7 @@ pub const PAYLOAD_TYPE_PING: u8 = 0;
 pub const PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT: u8 = 1;
 pub const PAYLOAD_TYPE_VOTE: u8 = 2;
 pub const PAYLOAD_TYPE_CA_DECLARATION: u8 = 3;
+pub const PAYLOAD_TYPE_CERT_CHAIN: u8 = 4;
 pub const PAYLOAD_TYPE_GET_PEERS_REQ: u8 = 5;
 pub const PAYLOAD_TYPE_GET_PEERS_RESP: u8 = 6;
 pub const PAYLOAD_TYPE_REFLECT_ADDR_REQ: u8 = 7;
@@ -18,6 +19,7 @@ pub const PAYLOAD_TYPE_MERKLE_DRILL_REQ: u8 = 11;
 pub const PAYLOAD_TYPE_MERKLE_DRILL_RESP: u8 = 12;
 #[allow(dead_code)]
 pub const PAYLOAD_TYPE_EQUIVOCATION_PROOF: u8 = 13;
+pub const PAYLOAD_TYPE_CRL_BROADCAST: u8 = 14;
 
 pub const DEFAULT_GOSSIP_TTL: u8 = 8;
 

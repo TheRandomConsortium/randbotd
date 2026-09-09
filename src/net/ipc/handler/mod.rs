@@ -1,9 +1,11 @@
 pub mod ca;
+pub mod crl;
 pub mod offer;
 pub mod peer;
 pub mod proof;
 
 pub use ca::CaHandler;
+pub use crl::CrlHandler;
 pub use offer::OfferHandler;
 pub use peer::PeerHandler;
 pub use proof::ProofHandler;
@@ -47,6 +49,7 @@ impl IpcHandlerRegistry {
     /// - `CaHandler`
     /// - `OfferHandler`
     /// - `ProofHandler`
+    /// - `CrlHandler`
     pub fn new() -> Self {
         Self {
             handlers: vec![
@@ -54,6 +57,7 @@ impl IpcHandlerRegistry {
                 Box::new(CaHandler),
                 Box::new(OfferHandler),
                 Box::new(ProofHandler),
+                Box::new(CrlHandler),
             ],
         }
     }

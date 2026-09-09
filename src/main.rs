@@ -425,19 +425,9 @@ async fn main() {
         &gossip_vote.msg_id[..4]
     );
 
-    let ca_payload = b"CA_DECLARATION:Issuer=TheRandomConsortium:Domain=*.hns".to_vec();
-    let gossip_ca = GossipMessage::new(
-        identity.signing_key(),
-        3,
-        DEFAULT_GOSSIP_TTL,
-        crate::net::gossip::PAYLOAD_TYPE_CA_DECLARATION,
-        ca_payload,
-    );
-    router.broadcast(&gossip_ca, &socket).await;
-    println!(
-        "  -> Broadcasted Signed Root CA Declaration (ID: {:02x?})",
-        &gossip_ca.msg_id[..4]
-    );
+    // CA-04: Automated broadcast of published non-draft CAs, certificate chains, and CRLs
+    net::router::broadcast::broadcast_published_pki_entities(&router, &db, &identity, &socket)
+        .await;
 
     let _all_resolved_peers = shared_phonebook.read().unwrap().resolve_peer_addresses();
 

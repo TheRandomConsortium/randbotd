@@ -77,6 +77,7 @@ An X.509 v3 certificate (RFC 5280) consists of a signed payload (`TBSCertificate
 | **Certificate Policies** | `2.5.29.32` | `FALSE` | Sequence of policy OIDs, Certification Practice Statement (CPS) URIs, and User Notices describing CA issuance policies and legal/operational terms. | RFC 5280 §4.2.1.4 | `CA-05` (X.509 Builder), `PAY-01` (Service Fee Publisher) | 🔴 |
 | **Authority Key Identifier (AKI)** | `2.5.29.35` | `FALSE` | Identifies the public key corresponding to the private key used to sign the cert. SHA-256 key identifier hash or issuer name + serial number. | RFC 5280 §4.2.1.1 | `CA-05` (X.509 Certificate Builder) | 🟢 |
 | **Subject Key Identifier (SKI)** | `2.5.29.14` | `FALSE` | SHA-256 hash of the subject public key. Essential for constructing certificate validation chains. | RFC 5280 §4.2.1.2 | `CA-05` (X.509 Certificate Builder) | 🟢 |
+| **CRL Distribution Points (CDP)** | `2.5.29.31` | `FALSE` | Uniform Resource Identifier (`URI`) pointing to P2P swarm broadcast endpoint `randbot://crl/<ca_id>` or HTTP fallback for RFC 5280 CRL synchronization. | RFC 5280 §4.2.1.13 | `CA-04` (P2P Cert Chain Broadcasting) | 🟢 |
 | **Authority Info Access (AIA)** | `1.3.6.1.5.5.7.1.1` | `FALSE` | Access descriptors: `id-ad-ocsp` and `id-ad-caIssuers`. In `randbotd`, augmented by P2P swarm queries. | RFC 5280 §4.2.2.1, RFC 6960 | `CA-15` (P2P AIA & OCSP Extension Engine) | 🟢 |
 
 ---

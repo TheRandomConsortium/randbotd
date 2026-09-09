@@ -17,6 +17,7 @@ use crate::storage::db::Database;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 pub mod anti_spam;
+pub mod broadcast;
 pub mod sync;
 use anti_spam::PeerAntiSpamState;
 use sync::*;
@@ -352,6 +353,18 @@ impl GossipRouter {
         } else if msg.payload_type == PAYLOAD_TYPE_MERKLE_DRILL_RESP {
             if let Some(db) = &self.database {
                 handle_merkle_drill_response(self, &msg, src, socket, identity, db).await;
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CA_DECLARATION {
+            if let Some(db) = &self.database {
+                broadcast::handle_ca_declaration_packet(&msg, db);
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CERT_CHAIN {
+            if let Some(db) = &self.database {
+                broadcast::handle_cert_chain_packet(&msg, db);
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CRL_BROADCAST {
+            if let Some(db) = &self.database {
+                broadcast::handle_crl_broadcast_packet(&msg, db);
             }
         }
 

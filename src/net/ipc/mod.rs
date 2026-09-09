@@ -94,6 +94,26 @@ pub enum IpcCommand {
         #[serde(default)]
         proof_binding: Option<String>,
     },
+    BroadcastCa {
+        ca_id_hex: String,
+    },
+    BroadcastCertChain {
+        serial_hex: String,
+    },
+    IssueCrl {
+        ca_id_hex: String,
+        revoked_serials: Vec<String>,
+        #[serde(default)]
+        reason: Option<u8>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
+    },
+    GetCrl {
+        ca_id_hex: String,
+    },
+    VerifyCertChain {
+        chain_json: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
