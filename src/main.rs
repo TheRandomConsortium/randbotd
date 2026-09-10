@@ -225,9 +225,11 @@ async fn main() {
     };
 
     // 4.2. Spawn Local Daemon IPC Control Server (NET-08)
+    let (broadcast_tx, mut broadcast_rx) = tokio::sync::mpsc::unbounded_channel();
     let ipc_socket_path = base_state_dir.join("randbotd.sock");
     let ipc_server =
-        net::ipc::IpcServer::with_db(ipc_socket_path, shared_phonebook.clone(), db.clone());
+        net::ipc::IpcServer::with_db(ipc_socket_path, shared_phonebook.clone(), db.clone())
+            .with_broadcast(broadcast_tx);
     let _ipc_handle = ipc_server.spawn();
 
     // Broadcast AddressAnnouncement Payload
@@ -286,6 +288,24 @@ async fn main() {
                     is_headless,
                 )
                 .await;
+        }
+    });
+
+    // Spawn Reactive Background Swarm Broadcast Task on IPC PKI Publication (CA-04)
+    let b_router = router.clone();
+    let b_db = Arc::clone(&db);
+    let b_identity = identity.clone();
+    let b_socket = socket.clone();
+    tokio::spawn(async move {
+        while broadcast_rx.recv().await.is_some() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            net::router::broadcast::broadcast_published_pki_entities(
+                &b_router,
+                &b_db,
+                &b_identity,
+                &b_socket,
+            )
+            .await;
         }
     });
 

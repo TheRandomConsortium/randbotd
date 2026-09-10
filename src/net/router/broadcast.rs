@@ -11,8 +11,12 @@ use crate::storage::db::Database;
 pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
     let decl: CaDeclaration = match serde_json::from_slice(&msg.payload) {
         Ok(d) => d,
-        Err(_) => {
-            // Support raw legacy / test strings gracefully
+        Err(err) => {
+            eprintln!(
+                "  ⚠️ [P2P CA Broadcast] Failed to deserialize CA declaration from peer: {}",
+                err
+            );
+            let _ = db.record_gossip_event(msg, true);
             return;
         }
     };
@@ -23,6 +27,7 @@ pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
             "  ⚠️ [P2P CA Broadcast] Ignored draft CA declaration `{}` from peer",
             decl.subject.common_name
         );
+        let _ = db.record_gossip_event(msg, true);
         return;
     }
 
@@ -31,6 +36,7 @@ pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
             "  ⚠️ [P2P CA Broadcast] Invalid CA subject metadata: {}",
             err
         );
+        let _ = db.record_gossip_event(msg, true);
         return;
     }
     if let Err(err) = decl.issuer.validate() {
@@ -38,6 +44,7 @@ pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
             "  ⚠️ [P2P CA Broadcast] Invalid CA issuer metadata: {}",
             err
         );
+        let _ = db.record_gossip_event(msg, true);
         return;
     }
 
@@ -49,8 +56,12 @@ pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
             bytes32_to_hex(&expected_ca_id),
             bytes32_to_hex(&decl.ca_id)
         );
+        let _ = db.record_gossip_event(msg, true);
         return;
     }
+
+    // Ingest valid CA declaration into immutable event log
+    let _ = db.record_gossip_event(msg, false);
 
     if let Err(err) = db.insert_ca(decl.clone()) {
         eprintln!(
@@ -157,7 +168,6 @@ pub async fn broadcast_published_pki_entities(
     socket: &tokio::net::UdpSocket,
 ) {
     let published_cas = db.list_cas();
-    let mut broadcast_count = 0;
     for ca in &published_cas {
         if !ca.is_draft {
             if let Ok(ca_payload) = serde_json::to_vec(ca) {
@@ -174,24 +184,8 @@ pub async fn broadcast_published_pki_entities(
                     ca.subject.common_name,
                     &gossip_ca.msg_id[..4]
                 );
-                broadcast_count += 1;
             }
         }
-    }
-    if broadcast_count == 0 {
-        let dummy_ca_payload = b"CA_DECLARATION:Issuer=TheRandomConsortium:Domain=*.hns".to_vec();
-        let gossip_ca = GossipMessage::new(
-            identity.signing_key(),
-            3,
-            crate::net::gossip::DEFAULT_GOSSIP_TTL,
-            crate::net::gossip::PAYLOAD_TYPE_CA_DECLARATION,
-            dummy_ca_payload,
-        );
-        router.broadcast(&gossip_ca, socket).await;
-        println!(
-            "  -> Broadcasted Signed Genesis CA Declaration (ID: {:02x?})",
-            &gossip_ca.msg_id[..4]
-        );
     }
 
     for chain in db.list_cert_chains() {
@@ -326,6 +320,10 @@ mod tests {
 
         handle_ca_declaration_packet(&draft_msg, &db);
         assert!(db.get_ca(&draft_ca_id).is_none());
+
+        let (valid, bullshit) = db.get_originator_reputation(&node_pubkey);
+        assert_eq!(valid, 1);
+        assert_eq!(bullshit, 1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

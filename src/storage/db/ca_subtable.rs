@@ -10,26 +10,31 @@ impl Database {
         declaration.issuer.validate()?;
 
         let ca_id = declaration.ca_id;
-        let mut store = self
-            .ca_store
-            .write()
-            .map_err(|e| format!("Lock poison error: {}", e))?;
+        let export_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> = {
+            let mut store = self
+                .ca_store
+                .write()
+                .map_err(|e| format!("Lock poison error: {}", e))?;
 
-        let mut decl_to_insert = declaration;
-        if let Some(existing) = store.get(&ca_id) {
-            if decl_to_insert.current_catalog_hash.is_none() {
-                decl_to_insert.current_catalog_hash = existing.current_catalog_hash;
+            let mut decl_to_insert = declaration;
+            if let Some(existing) = store.get(&ca_id) {
+                if !existing.is_draft && decl_to_insert.is_draft {
+                    return Err("Cannot demote published CA to draft".to_string());
+                }
+                if decl_to_insert.current_catalog_hash.is_none() {
+                    decl_to_insert.current_catalog_hash = existing.current_catalog_hash;
+                }
+                if decl_to_insert.offer_ids.is_empty() {
+                    decl_to_insert.offer_ids = existing.offer_ids.clone();
+                }
             }
-            if decl_to_insert.offer_ids.is_empty() {
-                decl_to_insert.offer_ids = existing.offer_ids.clone();
-            }
-        }
-        store.insert(ca_id, decl_to_insert);
+            store.insert(ca_id, decl_to_insert);
 
-        let export_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> = store
-            .iter()
-            .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
-            .collect();
+            store
+                .iter()
+                .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
+                .collect()
+        };
 
         let json_data = serde_json::to_string_pretty(&export_map)
             .map_err(|e| format!("Failed to serialize ca_store: {}", e))?;

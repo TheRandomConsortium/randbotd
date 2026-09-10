@@ -234,6 +234,30 @@ impl Database {
         Ok(())
     }
 
+    /// Ingests a verified gossip message into the immutable event log (marking whether payload was bullshit/invalid)
+    pub fn record_gossip_event(
+        &self,
+        msg: &crate::net::gossip::GossipMessage,
+        is_bullshit: bool,
+    ) -> Result<(), String> {
+        let entry = EventLogEntry {
+            seq: msg.seq,
+            prev_hash: [0u8; 32],
+            originator: msg.originator_pubkey,
+            payload_type: msg.payload_type,
+            payload: msg.payload.clone(),
+            signature_bytes: msg.signature.to_vec(),
+            is_bullshit,
+        };
+
+        let mut log = self
+            .event_log
+            .write()
+            .map_err(|_| "Database rwlock poisoned".to_string())?;
+
+        self.persist_and_append_entry(&mut log, entry)
+    }
+
     pub fn get_originator_reputation(&self, originator: &[u8; 32]) -> (usize, usize) {
         if let Ok(log) = self.event_log.read() {
             let mut valid = 0;

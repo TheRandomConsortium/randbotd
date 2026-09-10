@@ -99,9 +99,34 @@ impl EventLogEntry {
         signed_data.extend_from_slice(&self.prev_hash);
         signed_data.push(self.payload_type);
         signed_data.extend_from_slice(&self.payload);
+        if vk.verify(&signed_data, &sig).is_ok() {
+            return Ok(());
+        }
 
-        vk.verify(&signed_data, &sig)
-            .map_err(|e| format!("Event signature verification failed: {}", e))
+        // Also accept GossipMessage wire frame signature format
+        let mut hasher = Sha256::new();
+        hasher.update(self.originator);
+        hasher.update(self.seq.to_be_bytes());
+        hasher.update([self.payload_type]);
+        hasher.update(&self.payload);
+        let msg_id: [u8; 32] = hasher.finalize().into();
+
+        for ttl in 1..=crate::net::gossip::DEFAULT_GOSSIP_TTL {
+            let mut gossip_signed = Vec::new();
+            gossip_signed.extend_from_slice(crate::net::frame::MAGIC_BYTES);
+            gossip_signed.extend_from_slice(&msg_id);
+            gossip_signed.extend_from_slice(&self.originator);
+            gossip_signed.extend_from_slice(&self.seq.to_be_bytes());
+            gossip_signed.extend_from_slice(&[ttl]);
+            gossip_signed.extend_from_slice(&[self.payload_type]);
+            gossip_signed.extend_from_slice(&self.payload);
+
+            if vk.verify(&gossip_signed, &sig).is_ok() {
+                return Ok(());
+            }
+        }
+
+        Err("Event signature verification failed".to_string())
     }
 }
 

@@ -126,6 +126,7 @@ pub struct IpcServer {
     socket_path: PathBuf,
     phonebook: Arc<RwLock<Phonebook>>,
     db: Option<Arc<Database>>,
+    broadcast_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
 impl IpcServer {
@@ -134,6 +135,7 @@ impl IpcServer {
             socket_path,
             phonebook,
             db: None,
+            broadcast_tx: None,
         }
     }
 
@@ -145,6 +147,11 @@ impl IpcServer {
         let mut server = Self::new(socket_path, phonebook);
         server.db = Some(db);
         server
+    }
+
+    pub fn with_broadcast(mut self, broadcast_tx: tokio::sync::mpsc::UnboundedSender<()>) -> Self {
+        self.broadcast_tx = Some(broadcast_tx);
+        self
     }
 
     /// Spawns the Unix Domain Socket IPC listener loop in a background tokio task
@@ -175,11 +182,13 @@ impl IpcServer {
                 self.socket_path.display()
             );
 
+            let broadcast_tx = self.broadcast_tx.clone();
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
                         let phonebook = Arc::clone(&self.phonebook);
                         let db = self.db.clone();
+                        let b_tx = broadcast_tx.clone();
                         tokio::spawn(async move {
                             let (reader, mut writer) = stream.into_split();
                             let mut buf_reader = BufReader::new(reader);
@@ -188,7 +197,31 @@ impl IpcServer {
                             if buf_reader.read_line(&mut line).await.is_ok() {
                                 let response = match serde_json::from_str::<IpcCommand>(&line) {
                                     Ok(cmd) => {
-                                        handler::handle_ipc_command(cmd, &phonebook, db.as_ref())
+                                        let resp = handler::handle_ipc_command(
+                                            cmd.clone(),
+                                            &phonebook,
+                                            db.as_ref(),
+                                        );
+                                        if let IpcResponse::Ok { .. } = &resp {
+                                            match &cmd {
+                                                IpcCommand::PublishCa { is_draft, .. } => {
+                                                    if is_draft != &Some(true) {
+                                                        if let Some(tx) = &b_tx {
+                                                            let _ = tx.send(());
+                                                        }
+                                                    }
+                                                }
+                                                IpcCommand::BroadcastCa { .. }
+                                                | IpcCommand::BroadcastCertChain { .. }
+                                                | IpcCommand::IssueCrl { .. } => {
+                                                    if let Some(tx) = &b_tx {
+                                                        let _ = tx.send(());
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        resp
                                     }
                                     Err(err) => IpcResponse::Error {
                                         reason: format!("Invalid IPC command JSON: {}", err),

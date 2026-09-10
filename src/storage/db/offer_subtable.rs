@@ -46,7 +46,7 @@ impl Database {
         };
 
         // Update parent CA declaration in ca_store with new catalog hash & offer IDs
-        {
+        let export_ca_map = {
             let mut ca_store = self
                 .ca_store
                 .write()
@@ -62,12 +62,13 @@ impl Database {
                     .iter()
                     .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
                     .collect();
+            export_map
+        };
 
-            let json_data = serde_json::to_string_pretty(&export_map)
-                .map_err(|e| format!("Failed to serialize ca_store: {}", e))?;
-            std::fs::write(&self.ca_file_path, json_data)
-                .map_err(|e| format!("Failed to write ca_declarations file: {}", e))?;
-        }
+        let json_data = serde_json::to_string_pretty(&export_ca_map)
+            .map_err(|e| format!("Failed to serialize ca_store: {}", e))?;
+        std::fs::write(&self.ca_file_path, json_data)
+            .map_err(|e| format!("Failed to write ca_declarations file: {}", e))?;
 
         // Persist offer_store to disk
         self.persist_offers()?;
@@ -107,15 +108,17 @@ impl Database {
     }
 
     fn persist_offers(&self) -> Result<(), String> {
-        let store = self
-            .offer_store
-            .read()
-            .map_err(|e| format!("Lock poison error: {}", e))?;
+        let export_map: std::collections::HashMap<String, Vec<CertificateOffer>> = {
+            let store = self
+                .offer_store
+                .read()
+                .map_err(|e| format!("Lock poison error: {}", e))?;
 
-        let export_map: std::collections::HashMap<String, Vec<CertificateOffer>> = store
-            .iter()
-            .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
-            .collect();
+            store
+                .iter()
+                .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
+                .collect()
+        };
 
         let json_data = serde_json::to_string_pretty(&export_map)
             .map_err(|e| format!("Failed to serialize offer_store: {}", e))?;

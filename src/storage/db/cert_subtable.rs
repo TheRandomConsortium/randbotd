@@ -11,17 +11,19 @@ impl Database {
     pub fn insert_cert_chain(&self, chain: CertificateChain) -> Result<[u8; 32], String> {
         let chain_id = chain.chain_id();
 
-        let mut store = self
-            .chain_store
-            .write()
-            .map_err(|e| format!("Lock poison error on chain_store: {}", e))?;
+        let export_map: HashMap<String, CertificateChain> = {
+            let mut store = self
+                .chain_store
+                .write()
+                .map_err(|e| format!("Lock poison error on chain_store: {}", e))?;
 
-        store.insert(chain_id, chain);
+            store.insert(chain_id, chain);
 
-        let export_map: HashMap<String, CertificateChain> = store
-            .iter()
-            .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
-            .collect();
+            store
+                .iter()
+                .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
+                .collect()
+        };
 
         let json_data = serde_json::to_string_pretty(&export_map)
             .map_err(|e| format!("Failed to serialize chain_store: {}", e))?;
@@ -65,26 +67,28 @@ impl Database {
     /// Inserts a validated CertificateRevocationList into the database and persists to disk
     pub fn insert_crl(&self, crl: CertificateRevocationList) -> Result<[u8; 32], String> {
         let ca_id = crl.issuer_ca_id;
-        let mut store = self
-            .crl_store
-            .write()
-            .map_err(|e| format!("Lock poison error on crl_store: {}", e))?;
+        let export_map: HashMap<String, CertificateRevocationList> = {
+            let mut store = self
+                .crl_store
+                .write()
+                .map_err(|e| format!("Lock poison error on crl_store: {}", e))?;
 
-        if let Some(existing) = store.get(&ca_id) {
-            if crl.crl_number < existing.crl_number {
-                return Err(format!(
-                    "Incoming CRL number {} is older than existing CRL number {}",
-                    crl.crl_number, existing.crl_number
-                ));
+            if let Some(existing) = store.get(&ca_id) {
+                if crl.crl_number < existing.crl_number {
+                    return Err(format!(
+                        "Incoming CRL number {} is older than existing CRL number {}",
+                        crl.crl_number, existing.crl_number
+                    ));
+                }
             }
-        }
 
-        store.insert(ca_id, crl);
+            store.insert(ca_id, crl);
 
-        let export_map: HashMap<String, CertificateRevocationList> = store
-            .iter()
-            .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
-            .collect();
+            store
+                .iter()
+                .map(|(k, v)| (bytes32_to_hex(k), v.clone()))
+                .collect()
+        };
 
         let json_data = serde_json::to_string_pretty(&export_map)
             .map_err(|e| format!("Failed to serialize crl_store: {}", e))?;

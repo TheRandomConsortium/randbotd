@@ -99,6 +99,68 @@ Worker Node                                 CA Node                             
 
 ---
 
+### 3.1.2 Horizontal Scaling (`CA-11` Swarms) vs. Vertical Sub-CA Delegation (Certificate Chains)
+
+An essential architectural distinction in `randbotd` governs when certificate chains are used versus when single-hop distributed swarms operate:
+
+```
+        +-----------------------------------------------------------------------------------+
+        |               PARADIGM 1: Horizontal Scaling (CA-11 Custodian Swarm)              |
+        +-----------------------------------------------------------------------------------+
+        |  [Node A]    [Node B]    [Node C]  <-- Threshold FROST Co-Signers (m-of-n)        |
+        |      \          |          /                                                      |
+        |       +---------+---------+                                                       |
+        |                 |                                                                 |
+        |         [Same Root CA Key]                                                        |
+        |                 | (1-hop direct issuance; 0 chain overhead)                       |
+        |                 v                                                                 |
+        |        [Leaf Domain Cert]                                                         |
+        +-----------------------------------------------------------------------------------+
+
+        +-----------------------------------------------------------------------------------+
+        |             PARADIGM 2: Vertical Delegation (Intermediate Certificate Chains)     |
+        +-----------------------------------------------------------------------------------+
+        |  [Root CA Node] (Autonomous Key 1, Global Trust Anchor)                           |
+        |        |                                                                          |
+        |        | Issues Intermediate Cert (cA=true, NameConstraints: .hns, pathLen=0)     |
+        |        v                                                                          |
+        |  [Sub-CA Node] (Autonomous Key 2, Independent Catalog, Scoped Policy)             |
+        |        |                                                                          |
+        |        | Issues Leaf Cert (cA=false)                                              |
+        |        v                                                                          |
+        |  [Leaf Domain Cert]  --> P2P Chain Validation: [Leaf -> Intermediate -> Root]     |
+        +-----------------------------------------------------------------------------------+
+```
+
+#### 1. Why Multi-Offer Catalogs (`CA-12`) Obsolete Product-Based Sub-CAs
+In legacy WebPKI (X.509/CABF), commercial CAs frequently spawn dozens of intermediate CAs merely to segment commercial product lines (e.g., separate intermediates for DV, OV, EV, Wildcard, or short-lived certs). In `randbotd`, this practice is strictly obsolete:
+- The **Multi-Tier Offer Catalog** (`CA-12`, `ca_offers.json`) allows a single CA identity to publish diverse issuance tiers (Free, Wildcard, Multi-SAN, Custom TTL, PQC ML-DSA-44) under distinct `offer_id` entries without creating intermediate certificates.
+- Direct root issuance minimizes ASN.1 DER packet size, conserves UDP MTU bounds across gossip broadcasting (`NET-02`), and eliminates path verification latency.
+
+#### 2. When Are Certificate Chains (`CA-04`) Actually Deployed?
+Certificate chains and intermediate certificates are reserved strictly for **autonomous vertical delegation**, rather than product segmentation:
+1. **Scoped Sub-CA Onboarding via `get-cert` / ACME (`CA-16`)**:
+   - An independent operator or regional consortium wanting to establish a sovereign CA without waiting months to bootstrap global P2P voter reputation can apply to an established, high-reputation Root CA.
+   - Upon meeting the Root CA's bonding fee and constitution requirements, the Root CA signs an Intermediate CA certificate (`build_intermediate_ca_certificate`) for the applicant's distinct public key.
+   - The intermediate cert is cryptographically bounded by **Subtree Name Constraints** (`CA-14`, e.g., strictly restricted to `.hns`, `.onion`, or `.i2p`) and `pathLenConstraint = 0` (preventing recursive sub-delegation).
+2. **Offline Root Isolation (Cold Storage Roots)**:
+   - An enterprise or institutional CA keeps its Root CA private key completely offline in cold storage, delegating operational online signing to an Intermediate CA key.
+
+#### 3. Node Operator Decision Fork: Swarm Custodian vs. Autonomous Sub-CA
+When a third-party operator seeks to participate in an existing CA's sphere of influence, `randbotd` provides two mutually exclusive operational modes:
+
+| Operational Dimension | Mode A: Swarm Custodian (`CA-11`) | Mode B: Sub-CA Delegation (Certificate Chain) |
+| :--- | :--- | :--- |
+| **Scaling Axis** | **Horizontal** (Capacity & High Availability) | **Vertical** (Hierarchical Governance & Scoping) |
+| **Key Architecture** | Single Shared Root Key ($m$-of-$n$ FROST DKG) | Separate Independent Private Keys (Parent & Child) |
+| **Chain Depth** | **1 Hop** (Direct root signature on leaf) | **2+ Hops** (`[Leaf -> Sub-CA -> Root]`) |
+| **Issuance Policy** | Executes Parent CA's catalog & pricing | Publishes independent `CaOfferCatalog` (`CA-12`) |
+| **Trust Model** | Operates as worker node inside parent identity | Independent CA identity bounded by `CA-14` subtrees |
+| **Economic Settlement** | Pay-As-You-Work co-signer share (`PAY-03`) | Retains 100% of leaf fees; pays upstream delegation fee |
+| **Revocation Method** | Operator removed from swarm membership | Intermediate cert revoked on parent CRL (`CA-04`) |
+
+---
+
 ### 3.2 Economic Model: Single Offer vs. Multi-Tier Offer Catalog (`CA-12`)
 
 A single static pricing model excludes either free domains or premium users. `randbotd` implements a structured **Offer Catalog** (`CAPublishOfferCatalog`):
