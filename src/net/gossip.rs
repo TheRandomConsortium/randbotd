@@ -20,6 +20,7 @@ pub const PAYLOAD_TYPE_MERKLE_DRILL_RESP: u8 = 12;
 #[allow(dead_code)]
 pub const PAYLOAD_TYPE_EQUIVOCATION_PROOF: u8 = 13;
 pub const PAYLOAD_TYPE_CRL_BROADCAST: u8 = 14;
+pub const PAYLOAD_TYPE_DOMAIN_PURGE: u8 = 15;
 
 pub const DEFAULT_GOSSIP_TTL: u8 = 8;
 

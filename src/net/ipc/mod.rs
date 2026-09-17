@@ -114,6 +114,29 @@ pub enum IpcCommand {
     VerifyCertChain {
         chain_json: String,
     },
+    PurgeDomain {
+        ca_id_hex: String,
+        domain: String,
+        #[serde(default)]
+        serial_hex: Option<String>,
+        #[serde(default)]
+        reason: Option<String>,
+        description: String,
+        #[serde(default)]
+        strike_evidence: Option<String>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
+    },
+    GetPurge {
+        domain: String,
+    },
+    ListPurges {
+        #[serde(default)]
+        ca_id_hex: Option<String>,
+    },
+    BroadcastPurge {
+        purge_id_hex: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

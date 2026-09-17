@@ -9,6 +9,7 @@ pub mod ca_subtable;
 pub mod cert_subtable;
 pub mod merkle;
 pub mod offer_subtable;
+pub mod purge_subtable;
 pub mod sync;
 
 pub const MAX_STAGED_EVENTS: usize = 50;
@@ -28,6 +29,7 @@ pub struct Database {
     offer_file_path: PathBuf,
     chain_file_path: PathBuf,
     crl_file_path: PathBuf,
+    purge_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
@@ -38,6 +40,7 @@ pub struct Database {
     chain_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::chain::CertificateChain>>,
     crl_store:
         RwLock<std::collections::HashMap<[u8; 32], crate::pki::crl::CertificateRevocationList>>,
+    purge_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::purge::DomainPurgeRecord>>,
 }
 
 #[allow(dead_code)]
@@ -55,6 +58,7 @@ impl Database {
         let offer_file_path = state_dir.join("ca_offers.json");
         let chain_file_path = state_dir.join("cert_chains.json");
         let crl_file_path = state_dir.join("crls.json");
+        let purge_file_path = state_dir.join("domain_purges.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -174,6 +178,25 @@ impl Database {
             std::collections::HashMap::new()
         };
 
+        let loaded_purges: std::collections::HashMap<
+            [u8; 32],
+            crate::pki::purge::DomainPurgeRecord,
+        > = if purge_file_path.exists() {
+            let content = std::fs::read_to_string(&purge_file_path)
+                .map_err(|e| format!("Failed to read domain_purges file: {}", e))?;
+            let hex_map: std::collections::HashMap<String, crate::pki::purge::DomainPurgeRecord> =
+                serde_json::from_str(&content).unwrap_or_default();
+            let mut map = std::collections::HashMap::new();
+            for (hex_key, purge) in hex_map {
+                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
+                    map.insert(bytes, purge);
+                }
+            }
+            map
+        } else {
+            std::collections::HashMap::new()
+        };
+
         Ok(Self {
             db_file_path,
             sync_offset_file_path,
@@ -181,6 +204,7 @@ impl Database {
             offer_file_path,
             chain_file_path,
             crl_file_path,
+            purge_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
@@ -189,6 +213,7 @@ impl Database {
             offer_store: RwLock::new(loaded_offers),
             chain_store: RwLock::new(loaded_chains),
             crl_store: RwLock::new(loaded_crls),
+            purge_store: RwLock::new(loaded_purges),
         })
     }
 

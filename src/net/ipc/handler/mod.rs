@@ -3,12 +3,14 @@ pub mod crl;
 pub mod offer;
 pub mod peer;
 pub mod proof;
+pub mod purge;
 
 pub use ca::CaHandler;
 pub use crl::CrlHandler;
 pub use offer::OfferHandler;
 pub use peer::PeerHandler;
 pub use proof::ProofHandler;
+pub use purge::PurgeHandler;
 
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
@@ -50,6 +52,7 @@ impl IpcHandlerRegistry {
     /// - `OfferHandler`
     /// - `ProofHandler`
     /// - `CrlHandler`
+    /// - `PurgeHandler`
     pub fn new() -> Self {
         Self {
             handlers: vec![
@@ -58,6 +61,7 @@ impl IpcHandlerRegistry {
                 Box::new(OfferHandler),
                 Box::new(ProofHandler),
                 Box::new(CrlHandler),
+                Box::new(PurgeHandler),
             ],
         }
     }

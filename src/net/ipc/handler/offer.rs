@@ -329,6 +329,20 @@ impl OfferHandler {
             };
         }
 
+        // Validate domain against active CA bad-domain purges (CA-07)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if database.is_domain_purged(domain, now) {
+            return IpcResponse::Error {
+                reason: format!(
+                    "Domain `{}` has been purged by CA and cannot be issued a certificate",
+                    domain
+                ),
+            };
+        }
+
         // Validate or autogenerate SANs
         let resolved_sans = if let Some(custom_sans) = sans {
             if custom_sans.len() as u32 > offer.coverage_scope.max_sans() {

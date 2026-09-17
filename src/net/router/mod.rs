@@ -366,6 +366,10 @@ impl GossipRouter {
             if let Some(db) = &self.database {
                 broadcast::handle_crl_broadcast_packet(&msg, db);
             }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_DOMAIN_PURGE {
+            if let Some(db) = &self.database {
+                broadcast::handle_domain_purge_packet(&msg, db);
+            }
         }
 
         if msg.ttl > 1 {
