@@ -2,23 +2,17 @@ use std::sync::{Arc, RwLock};
 
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
-use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 /// IPC Handler responsible for peer network management and phonebook operations
 pub struct PeerHandler;
 
 impl IpcHandler for PeerHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        phonebook: &Arc<RwLock<Phonebook>>,
-        _db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::ImportPeer { peer_addr } => {
-                Some(Self::handle_import_peer(peer_addr, phonebook))
+                Some(Self::handle_import_peer(peer_addr, ctx.phonebook))
             }
             _ => None,
         }

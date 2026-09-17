@@ -146,6 +146,18 @@ impl Database {
         self.get_active_purge_for_domain(domain, now).is_some()
     }
 
+    /// Checks if a domain has an active unexpired purge issued specifically by `ca_id`
+    pub fn is_domain_purged_by_ca(&self, ca_id: &[u8; 32], domain: &str, now: u64) -> bool {
+        self.purge_store
+            .read()
+            .map(|store| {
+                store.values().any(|p| {
+                    &p.ca_id == ca_id && p.domain.eq_ignore_ascii_case(domain) && p.expires_at > now
+                })
+            })
+            .unwrap_or(false)
+    }
+
     /// Returns a list of all registered domain purges
     pub fn list_purges(&self) -> Vec<DomainPurgeRecord> {
         self.purge_store
@@ -349,6 +361,8 @@ pub mod tests {
         let db_reopened = Database::open(&temp_dir).expect("Database must reopen cleanly");
         assert!(db_reopened.get_ca(&legacy_ca_id).is_some());
         assert!(db_reopened.is_domain_purged("legacy-bad.com", 1700000000));
+        assert!(db_reopened.is_domain_purged_by_ca(&legacy_ca_id, "legacy-bad.com", 1700000000));
+        assert!(!db_reopened.is_domain_purged_by_ca(&[0x99u8; 32], "legacy-bad.com", 1700000000));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

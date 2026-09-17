@@ -1,9 +1,9 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::crypto::agility::{CaKeyPair, KeyAlgorithm};
+use crate::crypto::identity::NodeIdentity;
 use crate::net::ipc::{IpcCommand, IpcResponse};
-use crate::net::phonebook::Phonebook;
+use crate::pki::ca::compute_ca_id;
 use crate::pki::cert::serial::CertificateSerialNumber;
 use crate::pki::purge::{
     calculate_required_difficulty, compute_purge_challenge, solve_purge_pow, validate_domain_name,
@@ -12,18 +12,13 @@ use crate::pki::purge::{
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 /// IPC Handler for Domain Purge management and broadcast triggers (CA-07)
 pub struct PurgeHandler;
 
 impl IpcHandler for PurgeHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        _phonebook: &Arc<RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::PurgeDomain {
                 ca_id_hex,
@@ -41,14 +36,15 @@ impl IpcHandler for PurgeHandler {
                 description,
                 strike_evidence.as_deref(),
                 *ttl_seconds,
-                db,
+                ctx.db,
+                ctx.identity,
             )),
-            IpcCommand::GetPurge { domain } => Some(Self::handle_get_purge(domain, db)),
+            IpcCommand::GetPurge { domain } => Some(Self::handle_get_purge(domain, ctx.db)),
             IpcCommand::ListPurges { ca_id_hex } => {
-                Some(Self::handle_list_purges(ca_id_hex.as_deref(), db))
+                Some(Self::handle_list_purges(ca_id_hex.as_deref(), ctx.db))
             }
             IpcCommand::BroadcastPurge { purge_id_hex } => {
-                Some(Self::handle_broadcast_purge(purge_id_hex, db))
+                Some(Self::handle_broadcast_purge(purge_id_hex, ctx.db))
             }
             _ => None,
         }
@@ -66,6 +62,7 @@ impl PurgeHandler {
         strike_evidence: Option<&str>,
         ttl_seconds: Option<u64>,
         db: Option<&Arc<Database>>,
+        identity: Option<&NodeIdentity>,
     ) -> IpcResponse {
         let database = match db {
             Some(d) => d,
@@ -93,6 +90,30 @@ impl PurgeHandler {
         if ca_decl.is_draft {
             return IpcResponse::Error {
                 reason: "Cannot issue domain purge for a draft CA declaration".to_string(),
+            };
+        }
+
+        // Verify that this node actually owns the CA (CA ID binding)
+        let node_id = match identity {
+            Some(id) => id,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Node identity key is required to sign CA domain purge records"
+                        .to_string(),
+                }
+            }
+        };
+
+        let my_pubkey = node_id.verifying_key().to_bytes();
+        let expected_ca_id = compute_ca_id(&ca_decl.subject.common_name, &my_pubkey);
+        if expected_ca_id != ca_id {
+            return IpcResponse::Error {
+                reason: format!(
+                    "CA `{}` is not owned by this node (expected CA ID {:02x?}, got {:02x?})",
+                    ca_decl.subject.common_name,
+                    &expected_ca_id[..4],
+                    &ca_id[..4]
+                ),
             };
         }
 
@@ -162,15 +183,8 @@ impl PurgeHandler {
 
         let pow_nonce = solve_purge_pow(&challenge, difficulty);
 
-        // Generate Ed25519 signing keypair
-        let ca_keypair = match CaKeyPair::generate(KeyAlgorithm::Ed25519) {
-            Ok(kp) => kp,
-            Err(e) => return IpcResponse::Error { reason: e },
-        };
-
-        let mut secret_arr = [0u8; 32];
-        secret_arr.copy_from_slice(&ca_keypair.private_key_bytes[..32]);
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret_arr);
+        // Sign with the node identity key (authoritative CA owner key)
+        let signing_key = node_id.signing_key();
 
         let record = match DomainPurgeRecord::new(
             ca_id,
@@ -184,7 +198,7 @@ impl PurgeHandler {
             description.to_string(),
             strike_evidence.map(|s| s.to_string()),
             pow_nonce,
-            &signing_key,
+            signing_key,
         ) {
             Ok(r) => r,
             Err(e) => return IpcResponse::Error { reason: e },
@@ -291,7 +305,9 @@ impl PurgeHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::phonebook::Phonebook;
     use crate::pki::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
+    use std::sync::RwLock;
 
     #[test]
     fn test_ipc_purge_handlers_end_to_end() {
@@ -300,6 +316,11 @@ mod tests {
         let _ = std::fs::create_dir_all(&temp_dir);
         let db = Arc::new(Database::open(&temp_dir).unwrap());
         let phonebook = Arc::new(RwLock::new(Phonebook::new()));
+
+        let identity = NodeIdentity::from_seed_and_role(
+            &[0x42u8; 32],
+            crate::crypto::identity::NodeRole::Voter,
+        );
 
         let subject = CaSubjectMetadata {
             common_name: "IPC Purge Test Root CA".to_string(),
@@ -310,7 +331,7 @@ mod tests {
             country: Some("ES".to_string()),
             email: None,
         };
-        let ca_id = compute_ca_id(&subject.common_name, b"ipc_purge_key_seed");
+        let ca_id = compute_ca_id(&subject.common_name, &identity.verifying_key().to_bytes());
         let ca_id_hex = bytes32_to_hex(&ca_id);
 
         let non_draft_ca = CaDeclaration::new(
@@ -328,6 +349,7 @@ mod tests {
         db.insert_ca(non_draft_ca).unwrap();
 
         let handler = PurgeHandler;
+        let ctx = IpcContext::new(&phonebook, Some(&db), Some(&identity));
 
         // 1. Test PurgeDomain IPC command
         let purge_cmd = IpcCommand::PurgeDomain {
@@ -340,7 +362,7 @@ mod tests {
             ttl_seconds: Some(86400),
         };
 
-        let resp = handler.handle(&purge_cmd, &phonebook, Some(&db)).unwrap();
+        let resp = handler.handle(&purge_cmd, &ctx).unwrap();
         match resp {
             IpcResponse::Ok { message } => {
                 assert!(message.contains("Bad-Domain Purge #1 created"));
@@ -348,11 +370,25 @@ mod tests {
             _ => panic!("Expected Ok response from PurgeDomain"),
         }
 
+        // Test CA ownership enforcement: another node cannot purge this CA's domains
+        let other_identity = NodeIdentity::from_seed_and_role(
+            &[0x99u8; 32],
+            crate::crypto::identity::NodeRole::Voter,
+        );
+        let unauthorized_ctx = IpcContext::new(&phonebook, Some(&db), Some(&other_identity));
+        let fail_resp = handler.handle(&purge_cmd, &unauthorized_ctx).unwrap();
+        match fail_resp {
+            IpcResponse::Error { reason } => {
+                assert!(reason.contains("not owned by this node"));
+            }
+            _ => panic!("Expected Error for unauthorized CA purge"),
+        }
+
         // 2. Test GetPurge for purged domain
         let get_cmd = IpcCommand::GetPurge {
             domain: "bad-actor.hns".to_string(),
         };
-        let resp_get = handler.handle(&get_cmd, &phonebook, Some(&db)).unwrap();
+        let resp_get = handler.handle(&get_cmd, &ctx).unwrap();
         match resp_get {
             IpcResponse::Ok { message } => {
                 assert!(message.contains("bad-actor.hns"));
@@ -365,7 +401,7 @@ mod tests {
         let list_cmd = IpcCommand::ListPurges {
             ca_id_hex: Some(ca_id_hex.clone()),
         };
-        let resp_list = handler.handle(&list_cmd, &phonebook, Some(&db)).unwrap();
+        let resp_list = handler.handle(&list_cmd, &ctx).unwrap();
         match resp_list {
             IpcResponse::Ok { message } => {
                 assert!(message.contains("bad-actor.hns"));
@@ -378,7 +414,7 @@ mod tests {
         let bcast_cmd = IpcCommand::BroadcastPurge {
             purge_id_hex: bytes32_to_hex(&latest.purge_id),
         };
-        let resp_bcast = handler.handle(&bcast_cmd, &phonebook, Some(&db)).unwrap();
+        let resp_bcast = handler.handle(&bcast_cmd, &ctx).unwrap();
         match resp_bcast {
             IpcResponse::Ok { message } => {
                 assert!(message.contains("queued for P2P swarm broadcast"));

@@ -13,6 +13,7 @@ fn notify_ipc_tests_skipped() {
     );
 }
 
+use crate::crypto::identity::NodeIdentity;
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use serde::{Deserialize, Serialize};
@@ -149,6 +150,7 @@ pub struct IpcServer {
     socket_path: PathBuf,
     phonebook: Arc<RwLock<Phonebook>>,
     db: Option<Arc<Database>>,
+    identity: Option<Arc<NodeIdentity>>,
     broadcast_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
@@ -158,6 +160,7 @@ impl IpcServer {
             socket_path,
             phonebook,
             db: None,
+            identity: None,
             broadcast_tx: None,
         }
     }
@@ -170,6 +173,11 @@ impl IpcServer {
         let mut server = Self::new(socket_path, phonebook);
         server.db = Some(db);
         server
+    }
+
+    pub fn with_identity(mut self, identity: Arc<NodeIdentity>) -> Self {
+        self.identity = Some(identity);
+        self
     }
 
     pub fn with_broadcast(mut self, broadcast_tx: tokio::sync::mpsc::UnboundedSender<()>) -> Self {
@@ -206,11 +214,13 @@ impl IpcServer {
             );
 
             let broadcast_tx = self.broadcast_tx.clone();
+            let identity = self.identity.clone();
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
                         let phonebook = Arc::clone(&self.phonebook);
                         let db = self.db.clone();
+                        let identity = identity.clone();
                         let b_tx = broadcast_tx.clone();
                         tokio::spawn(async move {
                             let (reader, mut writer) = stream.into_split();
@@ -224,6 +234,7 @@ impl IpcServer {
                                             cmd.clone(),
                                             &phonebook,
                                             db.as_ref(),
+                                            identity.as_deref(),
                                         );
                                         if let IpcResponse::Ok { .. } = &resp {
                                             match &cmd {
@@ -236,7 +247,9 @@ impl IpcServer {
                                                 }
                                                 IpcCommand::BroadcastCa { .. }
                                                 | IpcCommand::BroadcastCertChain { .. }
-                                                | IpcCommand::IssueCrl { .. } => {
+                                                | IpcCommand::IssueCrl { .. }
+                                                | IpcCommand::BroadcastPurge { .. }
+                                                | IpcCommand::PurgeDomain { .. } => {
                                                     if let Some(tx) = &b_tx {
                                                         let _ = tx.send(());
                                                     }

@@ -9,18 +9,13 @@ use crate::proof::DomainNetworkType;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 /// IPC Handler responsible for CA publication, drafting, metadata validation, and entropy initialization
 pub struct CaHandler;
 
 impl IpcHandler for CaHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        phonebook: &Arc<RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::PublishCa {
                 ca_id_hex,
@@ -50,8 +45,8 @@ impl IpcHandler for CaHandler {
                 *is_draft,
                 supported_domain_networks.as_ref(),
                 permitted_subtrees.as_ref(),
-                phonebook,
-                db,
+                ctx.phonebook,
+                ctx.db,
             )),
             _ => None,
         }

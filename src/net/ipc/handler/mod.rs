@@ -12,10 +12,32 @@ pub use peer::PeerHandler;
 pub use proof::ProofHandler;
 pub use purge::PurgeHandler;
 
+use crate::crypto::identity::NodeIdentity;
 use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::net::phonebook::Phonebook;
 use crate::storage::db::Database;
 use std::sync::{Arc, RwLock};
+
+/// Context provided to domain-specific IPC Command Handlers
+pub struct IpcContext<'a> {
+    pub phonebook: &'a Arc<RwLock<Phonebook>>,
+    pub db: Option<&'a Arc<Database>>,
+    pub identity: Option<&'a NodeIdentity>,
+}
+
+impl<'a> IpcContext<'a> {
+    pub fn new(
+        phonebook: &'a Arc<RwLock<Phonebook>>,
+        db: Option<&'a Arc<Database>>,
+        identity: Option<&'a NodeIdentity>,
+    ) -> Self {
+        Self {
+            phonebook,
+            db,
+            identity,
+        }
+    }
+}
 
 /// Domain-specific IPC Command Handler Trait
 ///
@@ -26,12 +48,7 @@ pub trait IpcHandler: Send + Sync {
     ///
     /// Returns `Some(IpcResponse)` if the command is handled by this domain handler,
     /// or `None` if the command belongs to another domain.
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        phonebook: &Arc<RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse>;
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse>;
 }
 
 /// Extensible Registry of IPC Domain Handlers
@@ -73,14 +90,9 @@ impl IpcHandlerRegistry {
     }
 
     /// Dispatches an IPC command across all registered domain handlers
-    pub fn dispatch(
-        &self,
-        command: &IpcCommand,
-        phonebook: &Arc<RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> IpcResponse {
+    pub fn dispatch(&self, command: &IpcCommand, ctx: &IpcContext) -> IpcResponse {
         for handler in &self.handlers {
-            if let Some(resp) = handler.handle(command, phonebook, db) {
+            if let Some(resp) = handler.handle(command, ctx) {
                 return resp;
             }
         }
@@ -90,14 +102,16 @@ impl IpcHandlerRegistry {
     }
 }
 
-/// Dispatches and executes IPC commands against local phonebook and database
+/// Dispatches and executes IPC commands against local phonebook, database, and node identity
 pub fn handle_ipc_command(
     command: IpcCommand,
     phonebook: &Arc<RwLock<Phonebook>>,
     db: Option<&Arc<Database>>,
+    identity: Option<&NodeIdentity>,
 ) -> IpcResponse {
     let registry = IpcHandlerRegistry::new();
-    registry.dispatch(&command, phonebook, db)
+    let ctx = IpcContext::new(phonebook, db, identity);
+    registry.dispatch(&command, &ctx)
 }
 
 #[cfg(test)]
@@ -106,12 +120,7 @@ mod tests {
 
     struct MockCustomHandler;
     impl IpcHandler for MockCustomHandler {
-        fn handle(
-            &self,
-            _command: &IpcCommand,
-            _phonebook: &Arc<RwLock<Phonebook>>,
-            _db: Option<&Arc<Database>>,
-        ) -> Option<IpcResponse> {
+        fn handle(&self, _command: &IpcCommand, _ctx: &IpcContext) -> Option<IpcResponse> {
             Some(IpcResponse::Ok {
                 message: "handled by mock custom handler".to_string(),
             })
@@ -128,9 +137,10 @@ mod tests {
         let cmd = IpcCommand::ImportPeer {
             peer_addr: "1.2.3.4:5678".to_string(),
         };
+        let ctx = IpcContext::new(&phonebook, None, None);
 
         // Initially no handlers
-        let resp = registry.dispatch(&cmd, &phonebook, None);
+        let resp = registry.dispatch(&cmd, &ctx);
         match resp {
             IpcResponse::Error { reason } => {
                 assert!(reason.contains("No handler registered"));
@@ -140,7 +150,7 @@ mod tests {
 
         // Register custom handler
         registry.register(Box::new(MockCustomHandler));
-        let resp2 = registry.dispatch(&cmd, &phonebook, None);
+        let resp2 = registry.dispatch(&cmd, &ctx);
         match resp2 {
             IpcResponse::Ok { message } => {
                 assert_eq!(message, "handled by mock custom handler");

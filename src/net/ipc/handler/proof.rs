@@ -1,26 +1,18 @@
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::DaemonConfig;
 use crate::net::ipc::{IpcCommand, IpcResponse};
-use crate::net::phonebook::Phonebook;
 use crate::proof::{
     DomainNetworkType, DomainProofChallenge, DomainProofResponse, DomainProofVerifier,
 };
-use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 /// IPC Handler responsible for domain ownership proof challenge creation and multi-network verification
 pub struct ProofHandler;
 
 impl IpcHandler for ProofHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        _phonebook: &Arc<std::sync::RwLock<Phonebook>>,
-        _db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, _ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::ChallengeDomainProof {
                 domain,

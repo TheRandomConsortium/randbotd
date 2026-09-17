@@ -4,14 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::config::DaemonConfig;
 use crate::crypto::agility::KeyAlgorithm;
 use crate::net::ipc::{IpcCommand, IpcResponse};
-use crate::net::phonebook::Phonebook;
 use crate::pki::cert::{X509Certificate, X509CertificateBuilder};
 use crate::pki::offer::CertificateOffer;
 use crate::proof::DomainNetworkType;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 fn get_masterpass() -> Vec<u8> {
     std::env::var("RANDBOTD_MASTERPASS")
@@ -24,12 +23,7 @@ fn get_masterpass() -> Vec<u8> {
 pub struct OfferHandler;
 
 impl IpcHandler for OfferHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        _phonebook: &Arc<std::sync::RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::PublishOffer {
                 ca_id_hex,
@@ -49,14 +43,14 @@ impl IpcHandler for OfferHandler {
                 *ttl_seconds,
                 coverage_scope.clone(),
                 *is_draft,
-                db,
+                ctx.db,
             )),
             IpcCommand::GetOffer {
                 ca_id_hex,
                 offer_id,
-            } => Some(Self::handle_get_offer(ca_id_hex, *offer_id, db)),
+            } => Some(Self::handle_get_offer(ca_id_hex, *offer_id, ctx.db)),
             IpcCommand::ListOffers { ca_id_hex } => {
-                Some(Self::handle_list_offers(ca_id_hex.as_deref(), db))
+                Some(Self::handle_list_offers(ca_id_hex.as_deref(), ctx.db))
             }
             IpcCommand::GenerateDomainCert {
                 ca_id_hex,
@@ -72,7 +66,7 @@ impl IpcHandler for OfferHandler {
                 subject_pubkey_hex.as_deref(),
                 sans.as_ref(),
                 proof_binding.as_deref(),
-                db,
+                ctx.db,
             )),
             _ => None,
         }
@@ -277,6 +271,26 @@ impl OfferHandler {
         }
     }
 
+    /// Policy evaluation for domain purges prior to certificate issuance.
+    ///
+    /// NOTE(CA-07 / Phase 7 - Review Purge Scope):
+    /// Purging is NOT intended to be a permanent, network-wide veto across all CAs:
+    /// - A domain with low fairban / UTW votes may renew earlier and match with a different CA.
+    /// - Purges are primarily CA-scoped unless a federated CA trust network is established
+    ///   where CAs explicitly opt into honoring foreign purges.
+    ///
+    /// We isolate this check here for Phase 7 review when cert emission & matchmaking are live.
+    pub fn is_domain_blocked_by_purge_policy(
+        db: &Database,
+        ca_id: &[u8; 32],
+        domain: &str,
+        now: u64,
+    ) -> bool {
+        // Enforce CA-scoped purge check: this CA will never issue a cert for domains it has purged.
+        // Also checks global wireframe purge state until CA trust networks / fairban matching are active in Phase 7.
+        db.is_domain_purged_by_ca(ca_id, domain, now) || db.is_domain_purged(domain, now)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn handle_generate_domain_cert(
         ca_id_hex: &str,
@@ -329,15 +343,15 @@ impl OfferHandler {
             };
         }
 
-        // Validate domain against active CA bad-domain purges (CA-07)
+        // Validate domain against bad-domain purge policy (CA-07 wireframe)
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        if database.is_domain_purged(domain, now) {
+        if Self::is_domain_blocked_by_purge_policy(database, &ca_id, domain, now) {
             return IpcResponse::Error {
                 reason: format!(
-                    "Domain `{}` has been purged by CA and cannot be issued a certificate",
+                    "Domain `{}` has been purged and cannot be issued a certificate under current policy",
                     domain
                 ),
             };

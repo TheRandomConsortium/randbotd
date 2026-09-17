@@ -229,6 +229,7 @@ async fn main() {
     let ipc_socket_path = base_state_dir.join("randbotd.sock");
     let ipc_server =
         net::ipc::IpcServer::with_db(ipc_socket_path, shared_phonebook.clone(), db.clone())
+            .with_identity(std::sync::Arc::new(identity.clone()))
             .with_broadcast(broadcast_tx);
     let _ipc_handle = ipc_server.spawn();
 

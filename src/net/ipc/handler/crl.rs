@@ -1,27 +1,21 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::crypto::agility::{CaKeyPair, KeyAlgorithm};
 use crate::net::ipc::{IpcCommand, IpcResponse};
-use crate::net::phonebook::Phonebook;
 use crate::pki::cert::serial::CertificateSerialNumber;
 use crate::pki::chain::CertificateChain;
 use crate::pki::crl::{CRLReason, RevokedCertificateEntry, X509CrlBuilder};
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
-use super::IpcHandler;
+use super::{IpcContext, IpcHandler};
 
 /// IPC Handler for CRL management, certificate chain validation, and swarm broadcast triggers
 pub struct CrlHandler;
 
 impl IpcHandler for CrlHandler {
-    fn handle(
-        &self,
-        command: &IpcCommand,
-        _phonebook: &Arc<RwLock<Phonebook>>,
-        db: Option<&Arc<Database>>,
-    ) -> Option<IpcResponse> {
+    fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
             IpcCommand::IssueCrl {
                 ca_id_hex,
@@ -33,15 +27,17 @@ impl IpcHandler for CrlHandler {
                 revoked_serials,
                 *reason,
                 *ttl_seconds,
-                db,
+                ctx.db,
             )),
-            IpcCommand::GetCrl { ca_id_hex } => Some(Self::handle_get_crl(ca_id_hex, db)),
-            IpcCommand::BroadcastCa { ca_id_hex } => Some(Self::handle_broadcast_ca(ca_id_hex, db)),
+            IpcCommand::GetCrl { ca_id_hex } => Some(Self::handle_get_crl(ca_id_hex, ctx.db)),
+            IpcCommand::BroadcastCa { ca_id_hex } => {
+                Some(Self::handle_broadcast_ca(ca_id_hex, ctx.db))
+            }
             IpcCommand::BroadcastCertChain { serial_hex } => {
-                Some(Self::handle_broadcast_cert_chain(serial_hex, db))
+                Some(Self::handle_broadcast_cert_chain(serial_hex, ctx.db))
             }
             IpcCommand::VerifyCertChain { chain_json } => {
-                Some(Self::handle_verify_cert_chain(chain_json, db))
+                Some(Self::handle_verify_cert_chain(chain_json, ctx.db))
             }
             _ => None,
         }
@@ -305,8 +301,10 @@ impl CrlHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::phonebook::Phonebook;
     use crate::pki::ca::{compute_ca_id, CaDeclaration, CaSubjectMetadata};
     use crate::pki::cert::builder::X509CertificateBuilder;
+    use std::sync::RwLock;
 
     #[test]
     fn test_ipc_crl_and_broadcast_handlers() {
@@ -343,12 +341,13 @@ mod tests {
         db.insert_ca(non_draft_decl.clone()).unwrap();
 
         let handler = CrlHandler;
+        let ctx = IpcContext::new(&phonebook, Some(&db), None);
 
         // 1. Test BroadcastCa for non-draft CA
         let bcast_cmd = IpcCommand::BroadcastCa {
             ca_id_hex: ca_id_hex.clone(),
         };
-        let resp = handler.handle(&bcast_cmd, &phonebook, Some(&db)).unwrap();
+        let resp = handler.handle(&bcast_cmd, &ctx).unwrap();
         match resp {
             IpcResponse::Ok { message } => assert!(message.contains("queued for automated P2P")),
             _ => panic!("Expected Ok response for BroadcastCa"),
@@ -391,7 +390,7 @@ mod tests {
             reason: Some(1), // KeyCompromise
             ttl_seconds: Some(86400),
         };
-        let resp = handler.handle(&issue_cmd, &phonebook, Some(&db)).unwrap();
+        let resp = handler.handle(&issue_cmd, &ctx).unwrap();
         match resp {
             IpcResponse::Ok { message } => assert!(message.contains("CRL #1 issued")),
             _ => panic!("Expected Ok response for IssueCrl"),
@@ -401,7 +400,7 @@ mod tests {
         let get_cmd = IpcCommand::GetCrl {
             ca_id_hex: ca_id_hex.clone(),
         };
-        let resp = handler.handle(&get_cmd, &phonebook, Some(&db)).unwrap();
+        let resp = handler.handle(&get_cmd, &ctx).unwrap();
         match resp {
             IpcResponse::Ok { message } => assert!(message.contains("crl_number")),
             _ => panic!("Expected Ok response for GetCrl"),
@@ -412,7 +411,7 @@ mod tests {
         let chain_json = serde_json::to_string(&chain).unwrap();
 
         let verify_cmd = IpcCommand::VerifyCertChain { chain_json };
-        let resp = handler.handle(&verify_cmd, &phonebook, Some(&db)).unwrap();
+        let resp = handler.handle(&verify_cmd, &ctx).unwrap();
         match resp {
             IpcResponse::Error { reason } => assert!(reason.contains("REVOKED via P2P CRL")),
             _ => panic!("Expected Error response for revoked cert in chain"),
