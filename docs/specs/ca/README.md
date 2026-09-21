@@ -12,6 +12,7 @@ This directory contains the authoritative specification suite for `randbotd`'s d
 | **Part 1: Certificate Definition** | [`01_certificate_definition.md`](file:///home/mreugenej7/git/randbotd/docs/specs/ca/01_certificate_definition.md) | Standard X.509 v3 header fields (RFC 5280 §4.1), standard extensions (§4.2), custom WoT OID extensions (`CA-10`), domain proofs (`CA-03`), and IEEE 1609.2 comparative attributes. |
 | **Part 2: CA Entities & Operational Model** | [`02_ca_entities_and_operational_model.md`](file:///home/mreugenej7/git/randbotd/docs/specs/ca/02_ca_entities_and_operational_model.md) | CA data model, custodian identity, distributed swarm delegation (`CA-11`), multi-tier offer catalog (`CA-12`), downward-only risk floors (`ACME-05`), anti-solipsism, and local node verification sovereignty. |
 | **Part 3: Standards & Implementation Notes** | [`03_standards_and_ca12_design.md`](file:///home/mreugenej7/git/randbotd/docs/specs/ca/03_standards_and_ca12_design.md) | International standards reference matrix (RFC 5280, RFC 8446, RFC 8555, ITU-T X.667), proposed feature additions, and pre-implementation architectural commitments for `CA-12` catalog subtable separation. |
+| **Part 4: Key Rotation & Remediation** | [`04_key_rotation_and_remediation.md`](file:///home/mreugenej7/git/randbotd/docs/specs/ca/04_key_rotation_and_remediation.md) | Offer-level key lifecycle, targeted rotations vs. full distrust remediation (`REP-09`), Proof-of-Possession (PoP) semantics, sequence chaining, and anti-solipsism swarm validation (`CA-09`). |
 
 ---
 

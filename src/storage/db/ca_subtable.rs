@@ -76,3 +76,22 @@ pub(crate) fn hex_to_bytes32(hex_str: &str) -> Result<[u8; 32], String> {
     }
     Ok(bytes)
 }
+
+pub(crate) fn load_hex_map_from_disk<T: serde::de::DeserializeOwned>(
+    path: &std::path::Path,
+) -> Result<std::collections::HashMap<[u8; 32], T>, String> {
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+    let hex_map: std::collections::HashMap<String, T> =
+        serde_json::from_str(&content).unwrap_or_default();
+    let mut map = std::collections::HashMap::new();
+    for (hex_key, val) in hex_map {
+        if let Ok(bytes) = hex_to_bytes32(&hex_key) {
+            map.insert(bytes, val);
+        }
+    }
+    Ok(map)
+}

@@ -10,6 +10,7 @@ pub mod cert_subtable;
 pub mod merkle;
 pub mod offer_subtable;
 pub mod purge_subtable;
+pub mod rotation_subtable;
 pub mod sync;
 
 pub const MAX_STAGED_EVENTS: usize = 50;
@@ -30,6 +31,7 @@ pub struct Database {
     chain_file_path: PathBuf,
     crl_file_path: PathBuf,
     purge_file_path: PathBuf,
+    rotation_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
@@ -41,6 +43,9 @@ pub struct Database {
     crl_store:
         RwLock<std::collections::HashMap<[u8; 32], crate::pki::crl::CertificateRevocationList>>,
     purge_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::purge::DomainPurgeRecord>>,
+    rotation_store:
+        RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::rotation::KeyRotationProof>>>,
+    distrust_store: RwLock<std::collections::HashMap<[u8; 32], u32>>,
 }
 
 #[allow(dead_code)]
@@ -59,6 +64,7 @@ impl Database {
         let chain_file_path = state_dir.join("cert_chains.json");
         let crl_file_path = state_dir.join("crls.json");
         let purge_file_path = state_dir.join("domain_purges.json");
+        let rotation_file_path = state_dir.join("key_rotations.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -100,102 +106,12 @@ impl Database {
             0
         };
 
-        let loaded_cas: std::collections::HashMap<[u8; 32], crate::pki::ca::CaDeclaration> =
-            if ca_file_path.exists() {
-                let content = std::fs::read_to_string(&ca_file_path)
-                    .map_err(|e| format!("Failed to read ca_declarations file: {}", e))?;
-                let hex_map: std::collections::HashMap<String, crate::pki::ca::CaDeclaration> =
-                    serde_json::from_str(&content).unwrap_or_default();
-                let mut map = std::collections::HashMap::new();
-                for (hex_key, decl) in hex_map {
-                    if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
-                        map.insert(bytes, decl);
-                    }
-                }
-                map
-            } else {
-                std::collections::HashMap::new()
-            };
-
-        let loaded_offers: std::collections::HashMap<
-            [u8; 32],
-            Vec<crate::pki::offer::CertificateOffer>,
-        > = if offer_file_path.exists() {
-            let content = std::fs::read_to_string(&offer_file_path)
-                .map_err(|e| format!("Failed to read ca_offers file: {}", e))?;
-            let hex_map: std::collections::HashMap<
-                String,
-                Vec<crate::pki::offer::CertificateOffer>,
-            > = serde_json::from_str(&content).unwrap_or_default();
-            let mut map = std::collections::HashMap::new();
-            for (hex_key, offers) in hex_map {
-                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
-                    map.insert(bytes, offers);
-                }
-            }
-            map
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let loaded_chains: std::collections::HashMap<
-            [u8; 32],
-            crate::pki::chain::CertificateChain,
-        > = if chain_file_path.exists() {
-            let content = std::fs::read_to_string(&chain_file_path)
-                .map_err(|e| format!("Failed to read cert_chains file: {}", e))?;
-            let hex_map: std::collections::HashMap<String, crate::pki::chain::CertificateChain> =
-                serde_json::from_str(&content).unwrap_or_default();
-            let mut map = std::collections::HashMap::new();
-            for (hex_key, chain) in hex_map {
-                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
-                    map.insert(bytes, chain);
-                }
-            }
-            map
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let loaded_crls: std::collections::HashMap<
-            [u8; 32],
-            crate::pki::crl::CertificateRevocationList,
-        > = if crl_file_path.exists() {
-            let content = std::fs::read_to_string(&crl_file_path)
-                .map_err(|e| format!("Failed to read crls file: {}", e))?;
-            let hex_map: std::collections::HashMap<
-                String,
-                crate::pki::crl::CertificateRevocationList,
-            > = serde_json::from_str(&content).unwrap_or_default();
-            let mut map = std::collections::HashMap::new();
-            for (hex_key, crl) in hex_map {
-                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
-                    map.insert(bytes, crl);
-                }
-            }
-            map
-        } else {
-            std::collections::HashMap::new()
-        };
-
-        let loaded_purges: std::collections::HashMap<
-            [u8; 32],
-            crate::pki::purge::DomainPurgeRecord,
-        > = if purge_file_path.exists() {
-            let content = std::fs::read_to_string(&purge_file_path)
-                .map_err(|e| format!("Failed to read domain_purges file: {}", e))?;
-            let hex_map: std::collections::HashMap<String, crate::pki::purge::DomainPurgeRecord> =
-                serde_json::from_str(&content).unwrap_or_default();
-            let mut map = std::collections::HashMap::new();
-            for (hex_key, purge) in hex_map {
-                if let Ok(bytes) = ca_subtable::hex_to_bytes32(&hex_key) {
-                    map.insert(bytes, purge);
-                }
-            }
-            map
-        } else {
-            std::collections::HashMap::new()
-        };
+        let loaded_cas = ca_subtable::load_hex_map_from_disk(&ca_file_path)?;
+        let loaded_offers = ca_subtable::load_hex_map_from_disk(&offer_file_path)?;
+        let loaded_chains = ca_subtable::load_hex_map_from_disk(&chain_file_path)?;
+        let loaded_crls = ca_subtable::load_hex_map_from_disk(&crl_file_path)?;
+        let loaded_purges = ca_subtable::load_hex_map_from_disk(&purge_file_path)?;
+        let loaded_rotations = ca_subtable::load_hex_map_from_disk(&rotation_file_path)?;
 
         Ok(Self {
             db_file_path,
@@ -205,6 +121,7 @@ impl Database {
             chain_file_path,
             crl_file_path,
             purge_file_path,
+            rotation_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
@@ -214,6 +131,8 @@ impl Database {
             chain_store: RwLock::new(loaded_chains),
             crl_store: RwLock::new(loaded_crls),
             purge_store: RwLock::new(loaded_purges),
+            rotation_store: RwLock::new(loaded_rotations),
+            distrust_store: RwLock::new(std::collections::HashMap::new()),
         })
     }
 

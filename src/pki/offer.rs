@@ -43,6 +43,8 @@ pub struct CertificateOffer {
     #[serde(default)]
     pub is_draft: bool,
     pub created_at: u64,
+    #[serde(default)]
+    pub public_key: Vec<u8>,
 }
 
 impl CertificateOffer {
@@ -88,6 +90,7 @@ impl CertificateOffer {
             coverage_scope,
             is_draft,
             created_at,
+            public_key: Vec::new(),
         })
     }
 
@@ -180,6 +183,9 @@ impl CaOfferCatalog {
             }
             for net in &offer.supported_domain_networks {
                 hasher.update([*net as u8]);
+            }
+            if !offer.public_key.is_empty() {
+                hasher.update(&offer.public_key);
             }
         }
         let result = hasher.finalize();

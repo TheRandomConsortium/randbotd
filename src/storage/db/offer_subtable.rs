@@ -107,7 +107,7 @@ impl Database {
         }
     }
 
-    fn persist_offers(&self) -> Result<(), String> {
+    pub(crate) fn persist_offers(&self) -> Result<(), String> {
         let export_map: std::collections::HashMap<String, Vec<CertificateOffer>> = {
             let store = self
                 .offer_store

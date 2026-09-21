@@ -370,6 +370,10 @@ impl GossipRouter {
             if let Some(db) = &self.database {
                 broadcast::handle_domain_purge_packet(&msg, db);
             }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_KEY_ROTATION {
+            if let Some(db) = &self.database {
+                broadcast::handle_key_rotation_packet(&msg, db);
+            }
         }
 
         if msg.ttl > 1 {

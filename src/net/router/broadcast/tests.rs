@@ -290,3 +290,144 @@ fn test_broadcast_domain_purge_packet_ingestion() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_broadcast_key_rotation_packet_ingestion() {
+    use crate::crypto::agility::{CaKeyPair, KeyAlgorithm};
+    use crate::net::gossip::PAYLOAD_TYPE_KEY_ROTATION;
+    use crate::pki::offer::{CertificateOffer, DEFAULT_OFFER_TTL_SECONDS};
+    use crate::pki::rotation::{KeyRotationProof, OfferKeyRotation, RotationReason};
+    use crate::pki::scope::CertificateCoverageScope;
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "randbotd_broadcast_rot_test_{}",
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let db = Arc::new(Database::open(&temp_dir).unwrap());
+
+    let ca_identity = NodeIdentity::from_seed_and_role(&[88u8; 32], NodeRole::Voter);
+    let ca_node_pubkey = ca_identity.verifying_key().to_bytes();
+    let attacker_identity = NodeIdentity::from_seed_and_role(&[99u8; 32], NodeRole::Voter);
+
+    let ca_subject = CaSubjectMetadata {
+        common_name: "Swarm Key Rotation CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("ES".to_string()),
+        email: None,
+    };
+    let ca_id = compute_ca_id(&ca_subject.common_name, &ca_node_pubkey);
+    let ca_decl = CaDeclaration::new(
+        ca_id,
+        ca_subject.clone(),
+        ca_subject,
+        false,
+        None,
+        Vec::new(),
+        1700000000,
+        false,
+        vec![crate::proof::DomainNetworkType::Clearnet],
+    )
+    .unwrap();
+    db.insert_ca(ca_decl).unwrap();
+
+    let offer = CertificateOffer::new(
+        0,
+        ca_id,
+        "Offer 0".to_string(),
+        KeyAlgorithm::Ed25519,
+        vec![crate::proof::DomainNetworkType::Clearnet],
+        DEFAULT_OFFER_TTL_SECONDS,
+        CertificateCoverageScope::SingleFqdn,
+        false,
+        1700000000,
+    )
+    .unwrap();
+    db.insert_offer(offer).unwrap();
+
+    // Set distrust strike
+    db.record_distrust_strike(&ca_id, "Compromise signal");
+    assert!(db.has_standing_distrust(&ca_id));
+
+    // Create valid rotation proof
+    let kp = CaKeyPair::generate(KeyAlgorithm::Ed25519).unwrap();
+    let now = 1700001000;
+    let pop = kp
+        .sign(&OfferKeyRotation::compute_pop_payload(
+            &ca_id,
+            0,
+            &kp.public_key_bytes,
+            now,
+        ))
+        .unwrap();
+
+    let rot = OfferKeyRotation {
+        offer_id: 0,
+        old_public_key: vec![0; 32],
+        new_public_key: kp.public_key_bytes.clone(),
+        key_algorithm: KeyAlgorithm::Ed25519,
+        proof_of_possession: pop,
+        old_key_revocation_signature: None,
+    };
+
+    let valid_proof = KeyRotationProof::new(
+        ca_id,
+        1,
+        [0u8; 32],
+        now,
+        RotationReason::DistrustRemediation,
+        vec![rot],
+        ca_identity.signing_key(),
+    )
+    .unwrap();
+
+    let valid_bytes = serde_json::to_vec(&valid_proof).unwrap();
+    let valid_msg = GossipMessage::new(
+        ca_identity.signing_key(),
+        1,
+        DEFAULT_GOSSIP_TTL,
+        PAYLOAD_TYPE_KEY_ROTATION,
+        valid_bytes,
+    );
+
+    handle_key_rotation_packet(&valid_msg, &db);
+
+    // Verified key rotation ingested and distrust reset!
+    assert_eq!(db.get_key_rotations_for_ca(&ca_id).len(), 1);
+    assert!(!db.has_standing_distrust(&ca_id));
+    assert_eq!(
+        db.get_offer(&ca_id, 0).unwrap().public_key,
+        kp.public_key_bytes
+    );
+
+    // Attacker attempts to forge a rotation
+    let attacker_rot = KeyRotationProof::new(
+        ca_id,
+        2,
+        valid_proof.proof_id,
+        now,
+        RotationReason::SuspectedLeakage,
+        valid_proof.rotations.clone(),
+        attacker_identity.signing_key(), // Wrong signing key!
+    )
+    .unwrap();
+
+    let forged_bytes = serde_json::to_vec(&attacker_rot).unwrap();
+    let forged_msg = GossipMessage::new(
+        attacker_identity.signing_key(),
+        2,
+        DEFAULT_GOSSIP_TTL,
+        PAYLOAD_TYPE_KEY_ROTATION,
+        forged_bytes,
+    );
+
+    handle_key_rotation_packet(&forged_msg, &db);
+
+    // Forged rotation must NOT be accepted into history
+    assert_eq!(db.get_key_rotations_for_ca(&ca_id).len(), 1);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -4,6 +4,8 @@ pub mod handler;
 mod tests;
 #[cfg(all(test, feature = "full-suite"))]
 mod tests_offer;
+#[cfg(all(test, feature = "full-suite"))]
+mod tests_rotation;
 
 #[cfg(all(test, not(feature = "full-suite")))]
 #[test]
@@ -137,6 +139,26 @@ pub enum IpcCommand {
     },
     BroadcastPurge {
         purge_id_hex: String,
+    },
+    PublishKeyRotation {
+        ca_id_hex: String,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        offer_id: Option<u32>,
+        #[serde(default)]
+        proof_json: Option<String>,
+    },
+    GetKeyRotations {
+        ca_id_hex: String,
+    },
+    GetCaDistrustStatus {
+        ca_id_hex: String,
+    },
+    RecordDistrustStrike {
+        ca_id_hex: String,
+        #[serde(default)]
+        reason: Option<String>,
     },
 }
 

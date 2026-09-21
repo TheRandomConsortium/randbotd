@@ -234,6 +234,70 @@ pub fn handle_domain_purge_packet(msg: &GossipMessage, db: &Arc<Database>) {
     );
 }
 
+/// Handles incoming P2P Key Rotation broadcast packets (PAYLOAD_TYPE_KEY_ROTATION = 16)
+pub fn handle_key_rotation_packet(msg: &GossipMessage, db: &Arc<Database>) {
+    let proof: crate::pki::rotation::KeyRotationProof = match serde_json::from_slice(&msg.payload) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!(
+                "  ⚠️ [P2P Key Rotation] Failed to deserialize key rotation proof: {}",
+                err
+            );
+            let _ = db.record_gossip_event(msg, true);
+            return;
+        }
+    };
+
+    // 1. Verify target CA exists and is non-draft
+    let ca = match db.get_ca(&proof.ca_id) {
+        Some(c) => c,
+        None => {
+            eprintln!(
+                "  ⚠️ [P2P Key Rotation] Rejected rotation for unknown CA ID {:02x?}",
+                &proof.ca_id[..4]
+            );
+            let _ = db.record_gossip_event(msg, true);
+            return;
+        }
+    };
+
+    if ca.is_draft {
+        eprintln!(
+            "  ⚠️ [P2P Key Rotation] Rejected rotation under draft CA `{}`",
+            ca.subject.common_name
+        );
+        let _ = db.record_gossip_event(msg, true);
+        return;
+    }
+
+    // 2. Validate proof against CA declaration and previous proof
+    let prev_proof = db.get_latest_key_rotation(&proof.ca_id);
+    if let Err(err) = proof.validate(&ca, &msg.originator_pubkey, prev_proof.as_ref()) {
+        eprintln!(
+            "  ⚠️ [P2P Key Rotation] Invalid rotation proof rejected for CA `{}`: {}",
+            ca.subject.common_name, err
+        );
+        let _ = db.record_gossip_event(msg, true);
+        return;
+    }
+
+    // 3. Ingest valid rotation into database subtable and event log
+    let _ = db.record_gossip_event(msg, false);
+
+    if let Err(err) = db.insert_key_rotation(proof.clone()) {
+        eprintln!(
+            "  ⚠️ [P2P Key Rotation] Failed to persist key rotation for CA `{}`: {}",
+            ca.subject.common_name, err
+        );
+        return;
+    }
+
+    println!(
+        "  🔄 [P2P Key Rotation] Ingested verified Key Rotation #{} for CA `{}` (Rotated {} offers)",
+        proof.rotation_seq, ca.subject.common_name, proof.rotations.len()
+    );
+}
+
 /// Automated broadcast of published non-draft CAs, certificate chains, and CRLs across the P2P swarm (CA-04)
 pub async fn broadcast_published_pki_entities(
     router: &crate::net::router::GossipRouter,
