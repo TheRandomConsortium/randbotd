@@ -7,8 +7,10 @@ use crate::crypto::identity::{NodeIdentity, NodeRole};
 use crate::net::ipc::{IpcCommand, IpcResponse, IpcServer};
 use crate::net::phonebook::Phonebook;
 use crate::net::router::tcp::{new_mock_cert_store, CertificateTcpClient, CertificateTcpServer};
+use crate::pki::ca::{CaDeclaration, CaSubjectMetadata};
 use crate::pki::swarm::{
-    CACapabilitiesProof, CustodianContract, CustodianDelegationRequest, CustodianSwarmRecord,
+    build_mock_capability_certificate, verify_mock_capability_certificate, CACapabilitiesProof,
+    CustodianContract, CustodianDelegationRequest, CustodianSwarmRecord,
     SwarmActivationConfirmation,
 };
 use crate::proof::DomainNetworkType;
@@ -169,7 +171,47 @@ async fn test_ipc_custodian_lifecycle_and_policy() {
 #[tokio::test]
 async fn test_end_to_end_delegation_with_tcp_mock_cert_transfer() {
     let mock_store = new_mock_cert_store();
-    let sample_pqc_cert = b"-----BEGIN CERTIFICATE-----\nML-DSA-44_POST_QUANTUM_MOCK_CERTIFICATE_PAYLOAD_EXCEEDING_UDP_MTU\n-----END CERTIFICATE-----\n".to_vec();
+    let challenge_nonce = 777777u64;
+    let ca_id = [0x99u8; 32];
+
+    let ca_subject = CaSubjectMetadata {
+        common_name: "Test CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("IS".to_string()),
+        email: None,
+    };
+    let ca_decl = CaDeclaration::new(
+        ca_id,
+        ca_subject.clone(),
+        ca_subject,
+        false,
+        None,
+        Vec::new(),
+        1000,
+        false,
+        vec![DomainNetworkType::Clearnet],
+    )
+    .unwrap();
+
+    // Dynamically generate genuine Post-Quantum ML-DSA-44 X.509 DER certificate
+    let cert = build_mock_capability_certificate(
+        &ca_decl,
+        KeyAlgorithm::MlDsa44,
+        challenge_nonce,
+        86400,
+        1000,
+    )
+    .expect("Real ML-DSA-44 DER cert generation should succeed");
+
+    let sample_pqc_cert = cert.der_bytes;
+    assert!(
+        sample_pqc_cert.len() > 1400,
+        "Post-quantum DER cert should exceed standard UDP MTU (len = {})",
+        sample_pqc_cert.len()
+    );
 
     let mut hasher = Sha256::new();
     hasher.update(&sample_pqc_cert);
@@ -209,7 +251,7 @@ async fn test_end_to_end_delegation_with_tcp_mock_cert_transfer() {
         ca_id,
         contract.worker_pubkey,
         contract_hash,
-        777777,
+        challenge_nonce,
         1,
         &ca_sk,
     );
@@ -233,7 +275,14 @@ async fn test_end_to_end_delegation_with_tcp_mock_cert_transfer() {
             .expect("TCP cert fetch should succeed");
     assert_eq!(fetched_cert, sample_pqc_cert);
 
-    // 5. CA emits SwarmActivationConfirmation
+    // 5. CA validates mock cert: ASN.1 DER framing, crypto signature, challenge nonce
+    assert!(
+        verify_mock_capability_certificate(&fetched_cert, KeyAlgorithm::MlDsa44, challenge_nonce)
+            .is_ok(),
+        "Verification of genuine DER capability cert must pass in pure Rust"
+    );
+
+    // 6. CA emits SwarmActivationConfirmation
     let confirmation = SwarmActivationConfirmation::new(
         ca_id,
         contract.worker_pubkey,

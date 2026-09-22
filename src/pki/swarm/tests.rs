@@ -125,3 +125,93 @@ fn test_custodian_delegation_request_and_proof() {
         .unwrap_err();
     assert!(err.contains("Consensus violation: contract expired"));
 }
+
+use crate::pki::ca::{CaDeclaration, CaSubjectMetadata};
+use crate::proof::DomainNetworkType;
+
+#[test]
+fn test_real_mock_capability_certificate_build_and_pure_rust_verify() {
+    let challenge_nonce = 123456789u64;
+    let ca_id = [0x55u8; 32];
+    let ca_subject = CaSubjectMetadata {
+        common_name: "Swarm Test CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("IS".to_string()),
+        email: None,
+    };
+    let ca_decl = CaDeclaration::new(
+        ca_id,
+        ca_subject.clone(),
+        ca_subject,
+        false,
+        None,
+        Vec::new(),
+        1000,
+        false,
+        vec![DomainNetworkType::Clearnet],
+    )
+    .unwrap();
+
+    // 1. Build real DER mock cert with Ed25519
+    let cert_ed25519 = build_mock_capability_certificate(
+        &ca_decl,
+        KeyAlgorithm::Ed25519,
+        challenge_nonce,
+        3600,
+        1000,
+    )
+    .expect("Ed25519 mock cert build should succeed");
+
+    assert!(cert_ed25519.pem_certificate.contains("BEGIN CERTIFICATE"));
+    assert!(cert_ed25519.sans[0].contains(&challenge_nonce.to_string()));
+
+    // Verify valid cert passes
+    assert!(verify_mock_capability_certificate(
+        &cert_ed25519.der_bytes,
+        KeyAlgorithm::Ed25519,
+        challenge_nonce,
+    )
+    .is_ok());
+
+    // Wrong challenge nonce fails verification
+    let wrong_nonce = 999999999u64;
+    assert!(verify_mock_capability_certificate(
+        &cert_ed25519.der_bytes,
+        KeyAlgorithm::Ed25519,
+        wrong_nonce,
+    )
+    .is_err());
+
+    // Wrong algorithm fails verification
+    assert!(verify_mock_capability_certificate(
+        &cert_ed25519.der_bytes,
+        KeyAlgorithm::EcdsaP384,
+        challenge_nonce,
+    )
+    .is_err());
+
+    // 2. Build real DER mock cert with Post-Quantum ML-DSA-44
+    let cert_mldsa = build_mock_capability_certificate(
+        &ca_decl,
+        KeyAlgorithm::MlDsa44,
+        challenge_nonce,
+        3600,
+        1000,
+    )
+    .expect("ML-DSA-44 mock cert build should succeed");
+
+    assert!(
+        cert_mldsa.der_bytes.len() > 1400,
+        "PQC cert must exceed UDP MTU"
+    );
+
+    assert!(verify_mock_capability_certificate(
+        &cert_mldsa.der_bytes,
+        KeyAlgorithm::MlDsa44,
+        challenge_nonce,
+    )
+    .is_ok());
+}

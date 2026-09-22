@@ -23,6 +23,10 @@ pub mod tcp;
 use anti_spam::PeerAntiSpamState;
 use sync::*;
 
+pub type PendingContractsStore =
+    Arc<RwLock<HashMap<[u8; 32], crate::pki::swarm::CustodianContract>>>;
+pub type PendingChallengesStore = Arc<RwLock<HashMap<[u8; 32], (u64, u32)>>>;
+
 pub struct GossipRouter {
     seen_cache: Arc<RwLock<HashMap<[u8; 32], u64>>>,
     active_peers: Arc<RwLock<HashMap<SocketAddr, u64>>>,
@@ -30,7 +34,8 @@ pub struct GossipRouter {
     phonebook: Arc<RwLock<Phonebook>>,
     database: Option<Arc<Database>>,
     pub mock_cert_store: tcp::MockCertStore,
-    pub pending_contracts: Arc<RwLock<HashMap<[u8; 32], crate::pki::swarm::CustodianContract>>>,
+    pub pending_contracts: PendingContractsStore,
+    pub pending_challenges: PendingChallengesStore,
 }
 
 impl GossipRouter {
@@ -44,6 +49,7 @@ impl GossipRouter {
             database: None,
             mock_cert_store: tcp::new_mock_cert_store(),
             pending_contracts: Arc::new(RwLock::new(HashMap::new())),
+            pending_challenges: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -56,6 +62,7 @@ impl GossipRouter {
             database: Some(database),
             mock_cert_store: tcp::new_mock_cert_store(),
             pending_contracts: Arc::new(RwLock::new(HashMap::new())),
+            pending_challenges: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

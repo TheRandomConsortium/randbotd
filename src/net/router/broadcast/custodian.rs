@@ -2,6 +2,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::crypto::identity::NodeIdentity;
 use crate::net::gossip::{
     GossipMessage, DEFAULT_GOSSIP_TTL, PAYLOAD_TYPE_CA_CAPABILITIES_PROOF,
@@ -11,7 +13,8 @@ use crate::net::router::tcp::CertificateTcpClient;
 use crate::net::router::GossipRouter;
 use crate::pki::ca::compute_ca_id;
 use crate::pki::swarm::{
-    CACapabilitiesProof, CustodianContract, CustodianDelegationRequest, CustodianSwarmRecord,
+    build_mock_capability_certificate, verify_mock_capability_certificate, CACapabilitiesProof,
+    CustodianContract, CustodianDelegationRequest, CustodianSwarmRecord,
     SwarmActivationConfirmation,
 };
 use crate::storage::db::ca_subtable::bytes32_to_hex;
@@ -67,6 +70,35 @@ pub async fn handle_custodian_contract_packet(
         return;
     }
 
+    // Invariant: Candidate worker must be a registered, non-draft CA whose network
+    // capabilities cover 100% of the networks supported by this delegating CA.
+    let worker_ca = match db.list_cas().into_iter().find(|decl| {
+        !decl.is_draft
+            && compute_ca_id(&decl.subject.common_name, &contract.worker_pubkey) == decl.ca_id
+    }) {
+        Some(w) => w,
+        None => {
+            eprintln!(
+                "  🤫 [Custodian Contract] Silently dropped: worker {:02x?} is not a published CA",
+                &contract.worker_pubkey[..4]
+            );
+            return;
+        }
+    };
+
+    let covers_all_nets = ca
+        .supported_domain_networks
+        .iter()
+        .all(|net| worker_ca.supported_domain_networks.contains(net));
+
+    if !covers_all_nets {
+        eprintln!(
+            "  🤫 [Custodian Contract] Silently dropped: worker CA lacks required networks ({:?} vs {:?})",
+            worker_ca.supported_domain_networks, ca.supported_domain_networks
+        );
+        return;
+    }
+
     // Local blind policy evaluation
     let policy = db.get_ca_custodian_policy(&ca.ca_id).unwrap_or_default();
 
@@ -117,6 +149,12 @@ pub async fn handle_custodian_contract_packet(
     let offers = db.list_offers_for_ca(&ca.ca_id);
     let target_offer_id = offers.first().map(|o| o.offer_id).unwrap_or(1);
     let challenge_nonce = rand::random::<u64>();
+
+    router
+        .pending_challenges
+        .write()
+        .unwrap()
+        .insert(contract_hash, (challenge_nonce, target_offer_id));
 
     let delegation_req = CustodianDelegationRequest::new(
         ca.ca_id,
@@ -179,13 +217,35 @@ pub async fn handle_custodian_delegation_req_packet(
         None => return,
     };
 
-    // Build mock certificate artifact adhering to catalog offer algorithm
-    let sample_cert = format!(
-        "-----BEGIN CERTIFICATE-----\nRANDBOTD_MOCK_CAPABILITY_CERTIFICATE_{:?}_{}\n-----END CERTIFICATE-----\n",
-        target_offer.key_algorithm, req.challenge_nonce
-    )
-    .into_bytes();
+    let target_ca = match db.get_ca(&req.ca_id) {
+        Some(ca) => ca,
+        None => return,
+    };
 
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Dynamically synthesize real X.509 DER certificate adhering to catalog offer algorithm & challenge nonce
+    let cert = match build_mock_capability_certificate(
+        &target_ca,
+        target_offer.key_algorithm,
+        req.challenge_nonce,
+        86400,
+        now,
+    ) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!(
+                "  ⚠️ [Custodian Proof] Failed to build DER certificate: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let sample_cert = cert.der_bytes;
     let cert_len = sample_cert.len() as u32;
     let mut hasher = Sha256::new();
     hasher.update(&sample_cert);
@@ -278,6 +338,17 @@ pub async fn handle_ca_capabilities_proof_packet(
         return;
     }
 
+    let (expected_nonce, _) = match router
+        .pending_challenges
+        .read()
+        .unwrap()
+        .get(&proof.contract_hash)
+        .copied()
+    {
+        Some(c) => c,
+        None => return,
+    };
+
     // Step 4a: Retrieve mock certificate over TCP via hardened client
     println!(
         "  🌐 [TCP Cert Fetch] Connecting to worker `{}` to fetch mock cert {:02x?}...",
@@ -303,6 +374,17 @@ pub async fn handle_ca_capabilities_proof_packet(
     };
 
     if cert_bytes.is_empty() {
+        return;
+    }
+
+    // Verify mock capability certificate: ASN.1 DER framing, crypto signature, and challenge nonce
+    if let Err(err) =
+        verify_mock_capability_certificate(&cert_bytes, proof.algorithm, expected_nonce)
+    {
+        eprintln!(
+            "  ⚠️ [Swarm Activation] Mock certificate verification failed: {}. Silently dropping.",
+            err
+        );
         return;
     }
 

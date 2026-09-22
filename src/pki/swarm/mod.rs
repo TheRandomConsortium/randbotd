@@ -4,6 +4,9 @@ use sha2::{Digest, Sha256};
 
 use crate::crypto::agility::KeyAlgorithm;
 
+pub mod mock_cert;
+pub use mock_cert::{build_mock_capability_certificate, verify_mock_capability_certificate};
+
 /// Blind local CA custodian acceptance policy (kept private on CA node)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaCustodianPolicy {

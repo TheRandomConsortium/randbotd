@@ -144,7 +144,16 @@ Implementation phases, ordered by dependency and foundational priority:
 
 ---
 
-## 🛡️ 9. Classical Attack Mitigation Matrix
+## 🌐 9. Multi-Network Live Test Domain Nonce Probing & Swarm Bridge Verification Engine
+
+| Feature ID | Module Name | Description | Status |
+| :--- | :--- | :--- | :---: |
+| `NET-10` | **Daemon-Pointed Multi-Network Canary Engine** | CAs configure canary test domains across each supported network overlay (Clearnet DNS, Handshake TLDs, Tor `.onion` hidden services, I2P `.i2p` eepsites) that point directly to the `randbotd` daemon's embedded multi-network endpoint listener. | 🔴 |
+| `NET-11` | **Automated Live Nonce Request Verification** | During custodian onboarding or scheduled liveness sweeps, the delegating CA issues a cryptographic challenge nonce and instructs candidate workers to resolve and retrieve/ping the canary domain over each declared overlay. Because the canary domains route directly to the CA daemon, the incoming challenge request is matched and verified automatically in real time—proving working, un-firewalled transport across every network with zero manual intervention. | 🔴 |
+
+---
+
+## 🛡️ 10. Classical Attack Mitigation Matrix
 
 | Attack Vector | Threat Description | Defense & Cryptographic Countermeasure |
 | :--- | :--- | :--- |
@@ -154,6 +163,7 @@ Implementation phases, ordered by dependency and foundational priority:
 | **Purge Extortion / Rug-Pull** | CA takes payment then revokes certificate prematurely without justification. | Covered by **Anti-Purge Game Theory & Consensus Enforcement** (`PAY-06`). Prorated fee refunds are enforced mathematically; invalid purges are rejected by P2P consensus, keeping certs valid locally. |
 | **Collusion / Cluster Manipulation** | Coordinated node ring voting deceptively to shield a corrupt CA's rating. | Covered by **Heuristic Cluster Ponderation Penalties** (`REP-07`). Invalid network actions degrade the voter weight of the offending node AND all behaviorally correlated cluster nodes. |
 | **Rogue CA / Key Leak / Decryption Fraud** | CA exhibits infrastructure fraud, compromised keys, or unauthorized secret sharing. | Covered by **PoW User CA Flagging & Market Distrust Strikes** (`REP-08`/`REP-09`). Users raise decaying PoW flags alerting domain owners (`NOTIF-01`) who emit permanent non-decaying market distrust strikes by renewing early. Remediated via **Cryptographic Key Rotation** (`CA-09`). |
+| **Simulated / Faked Network Capabilities** | Custodian claims Tor/I2P support to earn delegation share without running proxies. | Covered by **Multi-Network Canary Probing** (`NET-10`/`NET-11`). CAs issue challenge nonces and poll test domains across all claimed network bridges; unresolvable probes trigger automatic silent drop or eviction. |
 
 ---
 
@@ -170,4 +180,6 @@ graph TD
     G --> H["Phase 7: Early Warning System & Caddy Plugin"]
     H --> I["Phase 8: Public Shaming Index (bullshiters.randºm)"]
     I --> J["Phase 9: Monero Decentralized Market & Escrow-less Settlement Engine"]
+    J --> K["Phase 10: Multi-Network Live Test Domain Nonce Probing & Swarm Bridge Verification"]
 ```
+
