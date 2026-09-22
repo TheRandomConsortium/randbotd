@@ -7,6 +7,9 @@ use crate::pki::crl::CertificateRevocationList;
 use crate::storage::db::ca_subtable::bytes32_to_hex;
 use crate::storage::db::Database;
 
+pub mod custodian;
+pub use custodian::*;
+
 /// Handles incoming P2P CA Declaration broadcast packets (PAYLOAD_TYPE_CA_DECLARATION = 3)
 pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
     let decl: CaDeclaration = match serde_json::from_slice(&msg.payload) {
@@ -385,3 +388,5 @@ pub async fn broadcast_published_pki_entities(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_custodian;

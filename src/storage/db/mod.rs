@@ -5,13 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::sync::RwLock;
 
-pub mod ca_subtable;
-pub mod cert_subtable;
 pub mod merkle;
-pub mod offer_subtable;
-pub mod purge_subtable;
-pub mod rotation_subtable;
+pub mod subtables;
 pub mod sync;
+
+pub use subtables::ca_subtable;
 
 pub const MAX_STAGED_EVENTS: usize = 50;
 
@@ -32,6 +30,8 @@ pub struct Database {
     crl_file_path: PathBuf,
     purge_file_path: PathBuf,
     rotation_file_path: PathBuf,
+    custodians_file_path: PathBuf,
+    policies_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
@@ -45,6 +45,9 @@ pub struct Database {
     purge_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::purge::DomainPurgeRecord>>,
     rotation_store:
         RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::rotation::KeyRotationProof>>>,
+    custodian_store:
+        RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::swarm::CustodianSwarmRecord>>>,
+    policy_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::swarm::CaCustodianPolicy>>,
     distrust_store: RwLock<std::collections::HashMap<[u8; 32], u32>>,
 }
 
@@ -65,6 +68,8 @@ impl Database {
         let crl_file_path = state_dir.join("crls.json");
         let purge_file_path = state_dir.join("domain_purges.json");
         let rotation_file_path = state_dir.join("key_rotations.json");
+        let custodians_file_path = state_dir.join("custodians.json");
+        let policies_file_path = state_dir.join("ca_custodian_policies.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -112,6 +117,8 @@ impl Database {
         let loaded_crls = ca_subtable::load_hex_map_from_disk(&crl_file_path)?;
         let loaded_purges = ca_subtable::load_hex_map_from_disk(&purge_file_path)?;
         let loaded_rotations = ca_subtable::load_hex_map_from_disk(&rotation_file_path)?;
+        let loaded_custodians = ca_subtable::load_hex_map_from_disk(&custodians_file_path)?;
+        let loaded_policies = ca_subtable::load_hex_map_from_disk(&policies_file_path)?;
 
         Ok(Self {
             db_file_path,
@@ -122,6 +129,8 @@ impl Database {
             crl_file_path,
             purge_file_path,
             rotation_file_path,
+            custodians_file_path,
+            policies_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
@@ -132,6 +141,8 @@ impl Database {
             crl_store: RwLock::new(loaded_crls),
             purge_store: RwLock::new(loaded_purges),
             rotation_store: RwLock::new(loaded_rotations),
+            custodian_store: RwLock::new(loaded_custodians),
+            policy_store: RwLock::new(loaded_policies),
             distrust_store: RwLock::new(std::collections::HashMap::new()),
         })
     }

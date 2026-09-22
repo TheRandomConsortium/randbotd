@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use super::ca_subtable::bytes32_to_hex;
-use super::Database;
 use crate::pki::offer::CaOfferCatalog;
 use crate::pki::rotation::KeyRotationProof;
+use crate::storage::db::ca_subtable::bytes32_to_hex;
+use crate::storage::db::Database;
 
 impl Database {
     /// Inserts and validates a KeyRotationProof into the rotation subtable and persists to disk (CA-09)

@@ -270,6 +270,30 @@ async fn main() {
         db.clone(),
     ));
 
+    // 5.1 Spawn Dual P2P TCP Certificate Streaming Server (CA-11)
+    println!("[CA-11] Binding Dual P2P TCP Certificate Streaming Server...");
+    match net::router::tcp::CertificateTcpServer::bind(&bind_addr, router.mock_cert_store.clone())
+        .await
+    {
+        Ok(tcp_server) => {
+            let actual_addr = tcp_server
+                .local_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| bind_addr.clone());
+            let _tcp_handle = tcp_server.spawn();
+            println!(
+                "  -> Dual P2P TCP Server bound successfully on {}",
+                actual_addr
+            );
+        }
+        Err(err) => {
+            eprintln!(
+                "  ⚠️ Warning: Failed to bind TCP server on {}: {}",
+                bind_addr, err
+            );
+        }
+    }
+
     // Spawn async P2P packet listener loop
     let listener_socket = socket.clone();
     let listener_router = router.clone();

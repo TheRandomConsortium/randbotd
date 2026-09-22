@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use super::ca_subtable::bytes32_to_hex;
-use super::Database;
 use crate::pki::purge::DomainPurgeRecord;
+use crate::storage::db::ca_subtable::bytes32_to_hex;
+use crate::storage::db::Database;
 
 impl Database {
     /// Inserts and validates a DomainPurgeRecord into the purge subtable and persists to disk

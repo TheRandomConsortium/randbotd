@@ -125,6 +125,8 @@ pub struct CaDeclaration {
     pub current_catalog_hash: Option<[u8; 32]>,
     #[serde(default)]
     pub offer_ids: Vec<u32>,
+    #[serde(default)]
+    pub seeking_custodians: bool,
 }
 
 impl CaDeclaration {
@@ -174,6 +176,7 @@ impl CaDeclaration {
             permitted_subtrees,
             current_catalog_hash: None,
             offer_ids: Vec::new(),
+            seeking_custodians: false,
         })
     }
 

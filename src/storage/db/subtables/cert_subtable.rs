@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use super::ca_subtable::bytes32_to_hex;
-use super::Database;
 use crate::pki::cert::serial::CertificateSerialNumber;
 use crate::pki::chain::CertificateChain;
 use crate::pki::crl::CertificateRevocationList;
+use crate::storage::db::ca_subtable::bytes32_to_hex;
+use crate::storage::db::Database;
 
 impl Database {
     /// Inserts a validated CertificateChain into the database and persists to disk

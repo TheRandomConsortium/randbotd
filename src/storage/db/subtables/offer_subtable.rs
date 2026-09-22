@@ -1,6 +1,6 @@
-use super::ca_subtable::bytes32_to_hex;
-use super::Database;
 use crate::pki::offer::{CaOfferCatalog, CertificateOffer};
+use crate::storage::db::ca_subtable::bytes32_to_hex;
+use crate::storage::db::Database;
 
 impl Database {
     /// Inserts or updates a certificate offer, links it to its CA declaration, and updates catalog hash

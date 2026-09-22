@@ -3,6 +3,8 @@ pub mod handler;
 #[cfg(all(test, feature = "full-suite"))]
 mod tests;
 #[cfg(all(test, feature = "full-suite"))]
+mod tests_custodian;
+#[cfg(all(test, feature = "full-suite"))]
 mod tests_offer;
 #[cfg(all(test, feature = "full-suite"))]
 mod tests_rotation;
@@ -159,6 +161,30 @@ pub enum IpcCommand {
         ca_id_hex: String,
         #[serde(default)]
         reason: Option<String>,
+    },
+    PublishCustodianContract {
+        ca_id_hex: String,
+        work_share_pct: u8,
+        valid_until: u64,
+        tcp_endpoint: String,
+    },
+    ListCustodians {
+        ca_id_hex: String,
+    },
+    SetSeekingCustodians {
+        ca_id_hex: String,
+        seeking: bool,
+    },
+    ConfigureCustodianPolicy {
+        ca_id_hex: String,
+        max_work_share_pct: u8,
+        min_ttl_seconds: u64,
+        target_swarm_size: usize,
+        auto_accept: bool,
+    },
+    RemoveCustodian {
+        ca_id_hex: String,
+        worker_pubkey_hex: String,
     },
 }
 

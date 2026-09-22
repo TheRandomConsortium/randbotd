@@ -1,5 +1,6 @@
 pub mod ca;
 pub mod crl;
+pub mod custodian;
 pub mod offer;
 pub mod peer;
 pub mod proof;
@@ -8,6 +9,7 @@ pub mod rotation;
 
 pub use ca::CaHandler;
 pub use crl::CrlHandler;
+pub use custodian::CustodianHandler;
 pub use offer::OfferHandler;
 pub use peer::PeerHandler;
 pub use proof::ProofHandler;
@@ -82,6 +84,7 @@ impl IpcHandlerRegistry {
                 Box::new(CrlHandler),
                 Box::new(PurgeHandler),
                 Box::new(RotationHandler),
+                Box::new(CustodianHandler),
             ],
         }
     }

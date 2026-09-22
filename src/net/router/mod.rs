@@ -19,6 +19,7 @@ use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 pub mod anti_spam;
 pub mod broadcast;
 pub mod sync;
+pub mod tcp;
 use anti_spam::PeerAntiSpamState;
 use sync::*;
 
@@ -28,6 +29,8 @@ pub struct GossipRouter {
     pub anti_spam: PeerAntiSpamState,
     phonebook: Arc<RwLock<Phonebook>>,
     database: Option<Arc<Database>>,
+    pub mock_cert_store: tcp::MockCertStore,
+    pub pending_contracts: Arc<RwLock<HashMap<[u8; 32], crate::pki::swarm::CustodianContract>>>,
 }
 
 impl GossipRouter {
@@ -39,6 +42,8 @@ impl GossipRouter {
             anti_spam: PeerAntiSpamState::new(),
             phonebook,
             database: None,
+            mock_cert_store: tcp::new_mock_cert_store(),
+            pending_contracts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -49,6 +54,8 @@ impl GossipRouter {
             anti_spam: PeerAntiSpamState::new(),
             phonebook,
             database: Some(database),
+            mock_cert_store: tcp::new_mock_cert_store(),
+            pending_contracts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -373,6 +380,24 @@ impl GossipRouter {
         } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_KEY_ROTATION {
             if let Some(db) = &self.database {
                 broadcast::handle_key_rotation_packet(&msg, db);
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CUSTODIAN_CONTRACT {
+            if let Some(db) = &self.database {
+                broadcast::handle_custodian_contract_packet(&msg, db, identity, socket, self).await;
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CUSTODIAN_DELEGATION_REQ {
+            if let Some(db) = &self.database {
+                broadcast::handle_custodian_delegation_req_packet(&msg, db, identity, socket, self)
+                    .await;
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_CA_CAPABILITIES_PROOF {
+            if let Some(db) = &self.database {
+                broadcast::handle_ca_capabilities_proof_packet(&msg, db, identity, socket, self)
+                    .await;
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_SWARM_ACTIVATION {
+            if let Some(db) = &self.database {
+                broadcast::handle_swarm_activation_packet(&msg, db);
             }
         }
 

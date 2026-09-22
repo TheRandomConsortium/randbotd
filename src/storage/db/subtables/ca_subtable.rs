@@ -1,4 +1,4 @@
-use super::Database;
+use crate::storage::db::Database;
 
 impl Database {
     /// Inserts a validated CA declaration into the CA subtable and persists to disk

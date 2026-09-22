@@ -100,6 +100,25 @@ impl Default for EntropyConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaPolicyConfig {
+    pub max_work_share_pct: Option<u8>,
+    pub min_ttl_seconds: Option<u64>,
+    pub target_swarm_size: Option<usize>,
+    pub auto_accept: Option<bool>,
+}
+
+impl Default for CaPolicyConfig {
+    fn default() -> Self {
+        Self {
+            max_work_share_pct: Some(30),
+            min_ttl_seconds: Some(86400),
+            target_swarm_size: Some(5),
+            auto_accept: Some(true),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DaemonConfig {
     #[serde(default)]
@@ -112,6 +131,8 @@ pub struct DaemonConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub entropy: EntropyConfig,
+    #[serde(default)]
+    pub ca: CaPolicyConfig,
 }
 
 impl DaemonConfig {
