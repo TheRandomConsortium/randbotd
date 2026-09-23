@@ -267,3 +267,127 @@ async fn test_ipc_ca14_intermediate_ca_name_constraints_roundtrip() {
     handle.abort();
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[tokio::test]
+async fn test_ipc_ca06_command_center_endpoints_roundtrip() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("randbotd_ipc_ca06_test_{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let socket_path = temp_dir.join("randbotd.sock");
+
+    let phonebook = test_phonebook();
+    let db = Arc::new(Database::open(&temp_dir).unwrap());
+    let server = IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+    let handle = server.spawn();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Helper closure to send command and read response
+    let send_cmd = |cmd: IpcCommand| {
+        let sock = socket_path.clone();
+        async move {
+            let stream = UnixStream::connect(&sock).await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let cmd_str = serde_json::to_string(&cmd).unwrap() + "\n";
+            writer.write_all(cmd_str.as_bytes()).await.unwrap();
+            let mut buf_reader = BufReader::new(reader);
+            let mut line = String::new();
+            buf_reader.read_line(&mut line).await.unwrap();
+            let resp: IpcResponse = serde_json::from_str(&line).unwrap();
+            resp
+        }
+    };
+
+    // 1. Publish Root CA
+    let ca_cmd = IpcCommand::PublishCa {
+        ca_id_hex: None,
+        common_name: "CA-06 Command Center Test CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("ES".to_string()),
+        email: None,
+        is_intermediate: false,
+        path_len_constraint: None,
+        is_draft: None,
+        supported_domain_networks: Some(vec![DomainNetworkType::Clearnet]),
+        permitted_subtrees: None,
+    };
+    let ca_resp = send_cmd(ca_cmd).await;
+    let ca_id_hex = match ca_resp {
+        IpcResponse::Ok { message } => message.split('`').nth(3).unwrap().to_string(),
+        _ => panic!("Expected CA publish Ok, got {:?}", ca_resp),
+    };
+
+    // 2. Test ListCas
+    let list_resp = send_cmd(IpcCommand::ListCas).await;
+    match list_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("CA-06 Command Center Test CA"));
+            assert!(message.contains(&ca_id_hex));
+        }
+        _ => panic!("Expected ListCas Ok, got {:?}", list_resp),
+    }
+
+    // 3. Test GetCa
+    let get_ca_resp = send_cmd(IpcCommand::GetCa {
+        ca_id_hex: ca_id_hex.clone(),
+    })
+    .await;
+    match get_ca_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("CA-06 Command Center Test CA"));
+        }
+        _ => panic!("Expected GetCa Ok, got {:?}", get_ca_resp),
+    }
+
+    // 4. Test GetNodeStatus
+    let status_resp = send_cmd(IpcCommand::GetNodeStatus).await;
+    match status_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("\"total_cas\": 1"));
+            assert!(message.contains("\"status\": \"online\""));
+        }
+        _ => panic!("Expected GetNodeStatus Ok, got {:?}", status_resp),
+    }
+
+    // 5. Test RevokeCert
+    let revoke_resp = send_cmd(IpcCommand::RevokeCert {
+        ca_id_hex: ca_id_hex.clone(),
+        serial_hex: "0102030405060708090a0b0c0d0e0f10".to_string(),
+        reason: Some(1), // keyCompromise
+    })
+    .await;
+    match revoke_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("CRL"));
+        }
+        _ => panic!("Expected RevokeCert Ok, got {:?}", revoke_resp),
+    }
+
+    // 6. Test GetCrl to confirm CRL is present and valid
+    let crl_resp = send_cmd(IpcCommand::GetCrl {
+        ca_id_hex: ca_id_hex.clone(),
+    })
+    .await;
+    match crl_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("crl_number"));
+            assert!(message.contains("revoked_certificates"));
+        }
+        _ => panic!("Expected GetCrl Ok, got {:?}", crl_resp),
+    }
+
+    // 7. Test ListPeers
+    let peers_resp = send_cmd(IpcCommand::ListPeers).await;
+    match peers_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.starts_with('['));
+        }
+        _ => panic!("Expected ListPeers Ok, got {:?}", peers_resp),
+    }
+
+    handle.abort();
+    let _ = std::fs::remove_dir_all(temp_dir);
+}

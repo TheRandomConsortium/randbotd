@@ -1,6 +1,6 @@
 [package]
 name = "randbotd"
-version = "3.7.1"
+version = "4.0.0"
 edition = "2021"
 authors = ["The Random Consortium"]
 description = "Random Consortium's Certificate Bot Daemon"
@@ -35,6 +35,18 @@ idna = "1.0"
 default = []
 full-suite = []
 
+[lib]
+name = "randbotd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "randbotd"
+path = "src/main.rs"
+
+[[bin]]
+name = "randbotctl"
+path = "src/cli/main_ctl.rs"
+
 [package.metadata.deb]
 maintainer = "The Random Consortium"
 copyright = "2026, The Random Consortium <MPL-2.0>"
@@ -44,6 +56,8 @@ section = "net"
 priority = "optional"
 assets = [
     ["target/release/randbotd", "usr/bin/randbotd", "755"],
+    ["target/release/randbotctl", "usr/bin/randbotctl", "755"],
     ["debian/randbotd.service", "lib/systemd/system/randbotd.service", "644"],
 ]
 systemd-units = { unit-name = "randbotd" }
+

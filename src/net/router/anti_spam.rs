@@ -10,6 +10,12 @@ pub struct PeerAntiSpamState {
     pub saturated_originators: SaturatedOriginatorMap,
 }
 
+impl Default for PeerAntiSpamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PeerAntiSpamState {
     pub fn new() -> Self {
         Self {

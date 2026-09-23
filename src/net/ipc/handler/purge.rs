@@ -210,6 +210,36 @@ impl PurgeHandler {
             };
         }
 
+        // Auto-Revocation on Domain Purge (CA-06 / CA-07 integration):
+        // Automatically revoke any certificates issued to this domain on the CA's CRL.
+        let mut serials_to_revoke = Vec::new();
+        if let Some(ref s) = record.serial_number {
+            serials_to_revoke.push(s.to_hex());
+        }
+        for chain in database.list_cert_chains() {
+            let matches_domain = chain.target_certificate.subject.common_name == domain
+                || chain
+                    .target_certificate
+                    .sans
+                    .iter()
+                    .any(|san| san == domain);
+            if matches_domain {
+                let s_hex = chain.target_certificate.serial_number.to_hex();
+                if !serials_to_revoke.contains(&s_hex) {
+                    serials_to_revoke.push(s_hex);
+                }
+            }
+        }
+        if !serials_to_revoke.is_empty() {
+            let _ = crate::net::ipc::handler::crl::CrlHandler::handle_issue_crl(
+                ca_id_hex,
+                &serials_to_revoke,
+                Some(9), // Reason 9: privilegeWithdrawn
+                ttl_seconds,
+                Some(database),
+            );
+        }
+
         IpcResponse::Ok {
             message: format!(
                 "Bad-Domain Purge #{} created and recorded for domain `{}` under CA `{}` (Purge ID: {})",

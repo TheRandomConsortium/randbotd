@@ -3,13 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
-mod cli;
-mod config;
-mod crypto;
-mod net;
-mod pki;
-mod proof;
-mod storage;
+use randbotd::{cli, config, crypto, net, storage};
 
 use cli::Cli;
 use config::DaemonConfig;

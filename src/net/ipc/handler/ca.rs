@@ -48,6 +48,8 @@ impl IpcHandler for CaHandler {
                 ctx.phonebook,
                 ctx.db,
             )),
+            IpcCommand::ListCas => Some(Self::handle_list_cas(ctx.db)),
+            IpcCommand::GetCa { ca_id_hex } => Some(Self::handle_get_ca(ca_id_hex, ctx.db)),
             _ => None,
         }
     }
@@ -168,6 +170,72 @@ impl CaHandler {
                     ),
                 }
             }
+        }
+    }
+
+    pub fn handle_list_cas(db: Option<&Arc<Database>>) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is uninitialized".to_string(),
+                }
+            }
+        };
+
+        let cas: Vec<serde_json::Value> = database
+            .list_cas()
+            .into_iter()
+            .map(|ca| {
+                let hex_str = bytes32_to_hex(&ca.ca_id);
+                let mut val = serde_json::to_value(&ca).unwrap_or(serde_json::Value::Null);
+                if let serde_json::Value::Object(ref mut map) = val {
+                    map.insert("ca_id_hex".to_string(), serde_json::Value::String(hex_str));
+                }
+                val
+            })
+            .collect();
+
+        match serde_json::to_string_pretty(&cas) {
+            Ok(json_str) => IpcResponse::Ok { message: json_str },
+            Err(e) => IpcResponse::Error {
+                reason: format!("Failed to serialize CAs: {}", e),
+            },
+        }
+    }
+
+    pub fn handle_get_ca(ca_id_hex: &str, db: Option<&Arc<Database>>) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is uninitialized".to_string(),
+                }
+            }
+        };
+
+        let ca_id = match hex_to_bytes32(ca_id_hex) {
+            Ok(id) => id,
+            Err(e) => return IpcResponse::Error { reason: e },
+        };
+
+        match database.get_ca(&ca_id) {
+            Some(decl) => {
+                let hex_str = bytes32_to_hex(&decl.ca_id);
+                let mut val = serde_json::to_value(&decl).unwrap_or(serde_json::Value::Null);
+                if let serde_json::Value::Object(ref mut map) = val {
+                    map.insert("ca_id_hex".to_string(), serde_json::Value::String(hex_str));
+                }
+                match serde_json::to_string_pretty(&val) {
+                    Ok(json_str) => IpcResponse::Ok { message: json_str },
+                    Err(e) => IpcResponse::Error {
+                        reason: format!("Failed to serialize CA: {}", e),
+                    },
+                }
+            }
+            None => IpcResponse::Error {
+                reason: format!("CA declaration `{}` not found", ca_id_hex),
+            },
         }
     }
 }

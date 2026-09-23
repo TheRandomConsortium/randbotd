@@ -186,6 +186,18 @@ pub enum IpcCommand {
         ca_id_hex: String,
         worker_pubkey_hex: String,
     },
+    ListCas,
+    GetCa {
+        ca_id_hex: String,
+    },
+    GetNodeStatus,
+    ListPeers,
+    RevokeCert {
+        ca_id_hex: String,
+        serial_hex: String,
+        #[serde(default)]
+        reason: Option<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +308,7 @@ impl IpcServer {
                                                 IpcCommand::BroadcastCa { .. }
                                                 | IpcCommand::BroadcastCertChain { .. }
                                                 | IpcCommand::IssueCrl { .. }
+                                                | IpcCommand::RevokeCert { .. }
                                                 | IpcCommand::BroadcastPurge { .. }
                                                 | IpcCommand::PurgeDomain { .. } => {
                                                     if let Some(tx) = &b_tx {

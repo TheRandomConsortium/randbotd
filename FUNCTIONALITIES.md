@@ -40,7 +40,7 @@ This document tracks all planned, ongoing, and completed feature modules, archit
 | `CA-03` | **Multi-Network Domain Proofs** | Verification of domain control via DNS TXT, Handshake record, Tor HTTP/TLS-ALPN, and I2P LeaseSets. A CA must have the corresponding daemon configured (`tor`/`i2p`/`hnsd`) to advertise support in `supported_domain_networks` — advertising a network type without a working backend is rejected at startup. Employs ISP catchall defense (Handshake first $\rightarrow$ Quad9 `9.9.9.9` second) and an **HTTP Nonce Fallback** for operators without DNS zone access: the CA emits a short-lived nonce, the node signs it with its Ed25519 identity key and serves the signature at `/.well-known/randbotd-proof`; the CA fetches and verifies the signature against the node public key. Features an exponential backoff retry engine for DNS/Tor/I2P propagation delays. | 🟢 |
 | `CA-04` | **P2P Cert Chain Broadcasting** | Automated broadcast of published CAs, intermediate cert chains, and CRLs across the P2P swarm. | 🟢 |
 | `CA-05` | **X.509 Certificate Builder** | Standard-compliant X.509 v3 certificate builder with custom extensions for WoT signatures, self-signed Root CA cert generation on offer publish, and domain cert test issuance IPC endpoint. | 🟢 |
-| `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🔴 |
+| `CA-06` | **CA Command Center Dashboard** | Management control plane for CA operators to monitor domain health, issue CRLs, rotate keys, and analyze trust metrics. | 🟢 |
 | `CA-07` | **Bad-Domain Purge Engine** | Allows CAs to broadcast UTW domain purge requests. Every purge request is independently validated by recipient local nodes against PoW/strike evidence; un-substantiated or fraudulent purges emitted by CAs are rejected locally by user nodes, leaving lying CAs in a solipsistic state. | 🟢 |
 | `CA-08` | **Configurable Certificate Parameters (Custom TTL)** | Allows CAs to specify custom issuance parameters, such as custom certificate validity/TTL (Time-To-Live). | 🟢 |
 | `CA-09` | **Cryptographic Key Rotation & Remediation Engine** | Allows CAs to publish signed `KeyRotationProof` payloads to revoke compromised key material and reset standing key-compromise flags following market distrust strikes. | 🟢 |
@@ -125,7 +125,7 @@ Implementation phases, ordered by dependency and foundational priority:
 | :--- | :--- | :--- | :---: |
 | `ECO-01` | **Caddy CertMagic Plugin** | Native Golang/Caddy plugin enabling seamless TLS auto-renewal via `randbotd` ACME endpoints. | 🔴 |
 | `ECO-02` | **`bullshiters.randºm` Public Portal & Recruitment Engine** | Public cryptographic shaming index targeting `out-of-net` legacy domains and CAs (Let's Encrypt, DigiCert, ICANN). Native nodes receive direct P2P inbox alerts, while `bullshiters.randºm` serves as a public shaming wall and second-hand recruitment portal for both legacy CAs ("ok, let's try that cypherpunk shit") and domain owners to migrate keys into randbotd P2P WoT consensus, kick bad domains, and participate in peer-voted encryption under the manifesto: *"This list has not been emitted by any central authority. We do not apologize, we do not revoke network consensus. To clean your image, just migrate to randbotd: if you use your same keys you will automatically be synced and you can start kicking bad domains and participate in real open and public encryption. Internet by the people, for the people."* | 🔴 |
-| `ECO-03` | **`randbotctl` CLI & CA Command Center** | Command-line interface for daemon control, CA publication, voting, domain purges, and reputation lookup. | 🔴 |
+| `ECO-03` | **`randbotctl` CLI & CA Command Center** | Command-line interface for daemon control, CA publication, voting, domain purges, and reputation lookup. | 🟡 |
 | `ECO-04` | **gRPC & REST Daemon APIs** | Local API endpoints for system integrations and client control. | 🔴 |
 
 ---
@@ -144,12 +144,13 @@ Implementation phases, ordered by dependency and foundational priority:
 
 ---
 
-## 🌐 9. Multi-Network Live Test Domain Nonce Probing & Swarm Bridge Verification Engine
+## 🌐 9. Multi-Network Live Test Domain Nonce Probing & Swarm Free-Market Verification Engine
 
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
 | `NET-10` | **Daemon-Pointed Multi-Network Canary Engine** | CAs configure canary test domains across each supported network overlay (Clearnet DNS, Handshake TLDs, Tor `.onion` hidden services, I2P `.i2p` eepsites) that point directly to the `randbotd` daemon's embedded multi-network endpoint listener. | 🔴 |
 | `NET-11` | **Automated Live Nonce Request Verification** | During custodian onboarding or scheduled liveness sweeps, the delegating CA issues a cryptographic challenge nonce and instructs candidate workers to resolve and retrieve/ping the canary domain over each declared overlay. Because the canary domains route directly to the CA daemon, the incoming challenge request is matched and verified automatically in real time—proving working, un-firewalled transport across every network with zero manual intervention. | 🔴 |
+| `SWARM-01` | **Free-Market Swarm Under-Bidding & Dynamic Displacement Engine** | When a CA's custodian swarm is at capacity (`active_custodians >= target_swarm_size`), incoming petitions are evaluated against current active contracts. If a candidate proposes a strictly lower revenue share than the highest incumbent ($W_{\text{new}} < W_{\text{max}}$), the CA stages $W_{\text{new}}$ for challenge while keeping $W_{\text{max}}$ operational, executing an atomic swap in `custodians.json` upon verified certificate delivery. Eliminates early-mover fee cartels and drives continuous downward pricing pressure. | 🔴 |
 
 ---
 
@@ -164,6 +165,7 @@ Implementation phases, ordered by dependency and foundational priority:
 | **Collusion / Cluster Manipulation** | Coordinated node ring voting deceptively to shield a corrupt CA's rating. | Covered by **Heuristic Cluster Ponderation Penalties** (`REP-07`). Invalid network actions degrade the voter weight of the offending node AND all behaviorally correlated cluster nodes. |
 | **Rogue CA / Key Leak / Decryption Fraud** | CA exhibits infrastructure fraud, compromised keys, or unauthorized secret sharing. | Covered by **PoW User CA Flagging & Market Distrust Strikes** (`REP-08`/`REP-09`). Users raise decaying PoW flags alerting domain owners (`NOTIF-01`) who emit permanent non-decaying market distrust strikes by renewing early. Remediated via **Cryptographic Key Rotation** (`CA-09`). |
 | **Simulated / Faked Network Capabilities** | Custodian claims Tor/I2P support to earn delegation share without running proxies. | Covered by **Multi-Network Canary Probing** (`NET-10`/`NET-11`). CAs issue challenge nonces and poll test domains across all claimed network bridges; unresolvable probes trigger automatic silent drop or eviction. |
+| **Swarm Fee Calcification / Cartel** | Early custodian workers fill capacity at max allowed cut (30%), locking out cheaper nodes. | Covered by **Free-Market Under-Bidding Displacement** (`SWARM-01`). New entrants offering lower revenue cuts trigger staged displacement of the highest-charging incumbent upon proof verification. |
 
 ---
 
@@ -180,6 +182,7 @@ graph TD
     G --> H["Phase 7: Early Warning System & Caddy Plugin"]
     H --> I["Phase 8: Public Shaming Index (bullshiters.randºm)"]
     I --> J["Phase 9: Monero Decentralized Market & Escrow-less Settlement Engine"]
-    J --> K["Phase 10: Multi-Network Live Test Domain Nonce Probing & Swarm Bridge Verification"]
+    J --> K["Phase 10: Multi-Network Live Probing & Swarm Free-Market Dynamics Engine"]
 ```
+
 

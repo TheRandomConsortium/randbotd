@@ -30,6 +30,13 @@ impl IpcHandler for CrlHandler {
                 ctx.db,
             )),
             IpcCommand::GetCrl { ca_id_hex } => Some(Self::handle_get_crl(ca_id_hex, ctx.db)),
+            IpcCommand::RevokeCert {
+                ca_id_hex,
+                serial_hex,
+                reason,
+            } => Some(Self::handle_revoke_cert(
+                ca_id_hex, serial_hex, *reason, ctx.db,
+            )),
             IpcCommand::BroadcastCa { ca_id_hex } => {
                 Some(Self::handle_broadcast_ca(ca_id_hex, ctx.db))
             }
@@ -168,6 +175,40 @@ impl CrlHandler {
                 reason: format!("No active CRL found for CA `{}`", ca_id_hex),
             },
         }
+    }
+
+    pub fn handle_revoke_cert(
+        ca_id_hex: &str,
+        serial_hex: &str,
+        reason_code: Option<u8>,
+        db: Option<&Arc<Database>>,
+    ) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is uninitialized".to_string(),
+                }
+            }
+        };
+
+        let ca_id = match hex_to_bytes32(ca_id_hex) {
+            Ok(id) => id,
+            Err(e) => return IpcResponse::Error { reason: e },
+        };
+
+        let mut serials = Vec::new();
+        if let Some(existing_crl) = database.get_crl(&ca_id) {
+            for entry in &existing_crl.revoked_certificates {
+                serials.push(entry.serial_number.to_hex());
+            }
+        }
+        let clean_serial = serial_hex.trim().to_lowercase();
+        if !serials.contains(&clean_serial) {
+            serials.push(clean_serial);
+        }
+
+        Self::handle_issue_crl(ca_id_hex, &serials, reason_code, None, db)
     }
 
     pub fn handle_broadcast_ca(ca_id_hex: &str, db: Option<&Arc<Database>>) -> IpcResponse {
