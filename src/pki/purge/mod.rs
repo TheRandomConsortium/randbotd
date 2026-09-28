@@ -355,14 +355,16 @@ pub fn compute_purge_challenge(
     prev_purge_hash: &[u8; 32],
     purge_seq: u64,
 ) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"randbotd_v1_purge_challenge");
-    hasher.update(ca_id);
-    hasher.update(domain.as_bytes());
-    hasher.update(timestamp.to_be_bytes());
-    hasher.update(prev_purge_hash);
-    hasher.update(purge_seq.to_be_bytes());
-    hasher.finalize().into()
+    let ts_bytes = timestamp.to_be_bytes();
+    let seq_bytes = purge_seq.to_be_bytes();
+    crate::crypto::pow::PowEngine::compute_challenge(&[
+        b"randbotd_v1_purge_challenge",
+        ca_id,
+        domain.as_bytes(),
+        &ts_bytes,
+        prev_purge_hash,
+        &seq_bytes,
+    ])
 }
 
 /// Calculates required PoW difficulty in leading zero bits:
@@ -371,52 +373,31 @@ pub fn calculate_required_difficulty(
     active_unexpired_purges: usize,
     has_strike_evidence: bool,
 ) -> u32 {
-    let n = (active_unexpired_purges + 1) as f64;
-    let log2_n = n.log2().floor() as u32;
-    let scaling = 2 * log2_n;
     let penalty = if has_strike_evidence {
         0
     } else {
         UNILATERAL_PURGE_PENALTY_BITS
     };
 
-    BASE_POW_DIFFICULTY + scaling + penalty
+    crate::crypto::pow::calculate_logarithmic_difficulty(
+        BASE_POW_DIFFICULTY,
+        active_unexpired_purges,
+        2,
+        penalty,
+    )
 }
 
 /// Solves the PoW challenge by finding a nonce that achieves the required difficulty
 pub fn solve_purge_pow(challenge: &[u8; 32], difficulty: u32) -> u64 {
-    let mut nonce = 0u64;
-    loop {
-        if verify_purge_pow(challenge, nonce, difficulty) {
-            return nonce;
-        }
-        nonce = nonce.wrapping_add(1);
-    }
+    crate::crypto::pow::solve_pow(challenge, difficulty)
 }
 
 /// Verifies whether `nonce` produces at least `difficulty` leading zero bits on `challenge`
 pub fn verify_purge_pow(challenge: &[u8; 32], nonce: u64, difficulty: u32) -> bool {
-    let mut hasher = Sha256::new();
-    hasher.update(challenge);
-    hasher.update(nonce.to_be_bytes());
-    let digest = hasher.finalize();
-
-    leading_zero_bits(&digest) >= difficulty
+    crate::crypto::pow::verify_pow(challenge, nonce, difficulty)
 }
 
-/// Counts the number of leading zero bits in a 256-bit digest
-fn leading_zero_bits(digest: &[u8]) -> u32 {
-    let mut count = 0u32;
-    for &byte in digest {
-        if byte == 0 {
-            count += 8;
-        } else {
-            count += byte.leading_zeros();
-            break;
-        }
-    }
-    count
-}
+pub use crate::crypto::pow::leading_zero_bits;
 
 fn compute_sign_payload(
     ca_id: &[u8; 32],

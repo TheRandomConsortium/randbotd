@@ -71,7 +71,7 @@ Implementation phases, ordered by dependency and foundational priority:
 
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
-| `REP-01` | **Proof-of-Work Challenge Engine** | Dynamic PoW puzzle generator (SHA-256 / Equihash) required for vote submission. | 🔴 |
+| `REP-01` | **Proof-of-Work Challenge Engine** | Modular, algorithm-agile PoW engine (`src/crypto/pow.rs`) supporting SHA-256 (extensible for Equihash). Enforces monotonic per-originator difficulty consensus: $D_{\text{vote}} = D_{\text{base}} + 2 \cdot \lfloor\log_2(N_{\text{active\_votes}} + 1)\rfloor + P_{\text{flip}}(\text{revisions\_on\_domain})$, binding challenges to $(originator \parallel prev\_hash \parallel domain \parallel vote\_action \parallel seq)$ to eliminate pre-mining and Sybil review-bombing without needing a global linear blockchain. Shared across Domain Purge (`CA-07`), Voting (`REP-02`), and CA Flagging (`REP-08`). | 🟢 |
 | `REP-02` | **1-Vote-Per-Node Dynamic Voting** | State machine enforcing 1 active vote per node per domain with real-time mind-changing support. | 🔴 |
 | `REP-03` | **Behavioral Score & Weight Ponderation** | Historical voter reputation engine scaling down voting power for detected review-bombers/Sybil nodes. | 🔴 |
 | `REP-04` | **Lazy Evaluation Engine** | On-demand computation of domain/CA trust scores and $\Delta$ windows. Automatically rescales $\Delta$ when active network node count $N_{\text{active\_nodes}}$ expands. | 🔴 |
@@ -80,6 +80,12 @@ Implementation phases, ordered by dependency and foundational priority:
 | `REP-07` | **Heuristic Cluster Ponderation Penalties** | Detects behavioral collusion rings and suspicious voting correlation. Invalid network interactions (e.g. fraudulent purges) degrade the voter ponderation of the offending node AND all heuristically linked cluster nodes. | 🔴 |
 | `REP-08` | **PoW User CA Flagging Engine (`Signal CA`)** | Allows end users to launch PoW-backed, weighted suspicion flags directly against CA identities. Does not immediately degrade CA trust score; decays exponentially via time half-life unless sustained. Triggers `NOTIF-01` domain inbox alerts upon crossing network threshold $T_{\text{warn}}$. | ⚪ |
 | `REP-09` | **Market Signal of Distrust & Early Renewal Punishment** | Enables domain owners to execute early cert renewals tagged with `reason: DistrustSignal`. Burns remaining TTL + ACME fee (replacing PoW) to issue a permanent, non-decaying direct UTW strike to the CA. Strike weight scales dynamically: $W_{\text{distrust}} = f(\text{TTL}_{\text{remaining}}, \text{Fee}_{\text{paid}}, \text{Flag}_{\text{level}})$. | ⚪ |
+
+> **Architectural note (Decentralized Voting PoW & Originator Monotonicity):** Because `randbotd` operates on decentralized, per-node monotonic hash-chained event logs rather than a single linear blockchain, PoW difficulty cannot depend on unsequenced cross-network global state (which would cause race conditions and false validation rejections between peers). Instead, voting PoW difficulty is deterministically computed from the voter's own monotonic state:
+> 1. **Baseline Difficulty ($D_{\text{base}} = 12$ bits)**: Minimal latency for honest community voters (~fraction of a second on standard CPUs).
+> 2. **Active Vote Volume Scaling**: $\Delta_{\text{volume}} = 2 \cdot \lfloor\log_2(N_{\text{active\_votes}} + 1)\rfloor$, ensuring honest voters face negligible friction while Sybil/review-bombing floods incur exponential computational cost.
+> 3. **Mind-Change Revision Penalty ($P_{\text{flip}}$)**: Dynamic vote updates/reversals on an existing domain under `REP-02` carry an incremental difficulty penalty to prevent oscillation spam.
+> 4. **Strict Causal Binding**: Puzzles hash $(originator \parallel prev\_hash \parallel domain \parallel vote\_action \parallel seq)$, preventing pre-computation and cross-domain or cross-node replay attacks.
 
 ---
 
