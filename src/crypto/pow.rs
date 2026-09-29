@@ -55,6 +55,29 @@ impl PowEngine {
         }
     }
 
+    /// Solves a PoW challenge by searching nonces. If nonces cycle through u32::MAX,
+    /// invokes `reseed_challenge(extra_nonce)` to change challenge entropy so unresolvable hashes are eliminated.
+    pub fn solve_with_changing_field<F>(
+        difficulty: u32,
+        mut reseed_challenge: F,
+    ) -> (u64, u64, [u8; 32])
+    where
+        F: FnMut(u64) -> [u8; 32],
+    {
+        let mut extra_nonce = 0u64;
+        loop {
+            let challenge = reseed_challenge(extra_nonce);
+            let mut nonce = 0u64;
+            while nonce <= u32::MAX as u64 {
+                if Self::verify(&challenge, nonce, difficulty) {
+                    return (nonce, extra_nonce, challenge);
+                }
+                nonce += 1;
+            }
+            extra_nonce = extra_nonce.wrapping_add(1);
+        }
+    }
+
     /// Calculates dynamic logarithmic difficulty:
     /// D = base_difficulty + step_bits * floor(log2(item_count + 1)) + penalty_bits
     pub fn calculate_logarithmic_difficulty(

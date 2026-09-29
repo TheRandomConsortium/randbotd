@@ -10,7 +10,7 @@ use crate::proof::DomainNetworkType;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
-use super::{IpcContext, IpcHandler};
+use crate::net::ipc::handler::{IpcContext, IpcHandler};
 
 fn get_masterpass() -> Vec<u8> {
     std::env::var("RANDBOTD_MASTERPASS")

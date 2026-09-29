@@ -10,6 +10,9 @@ use crate::storage::db::Database;
 pub mod custodian;
 pub use custodian::*;
 
+pub mod vote;
+pub use vote::*;
+
 /// Handles incoming P2P CA Declaration broadcast packets (PAYLOAD_TYPE_CA_DECLARATION = 3)
 pub fn handle_ca_declaration_packet(msg: &GossipMessage, db: &Arc<Database>) {
     let decl: CaDeclaration = match serde_json::from_slice(&msg.payload) {
@@ -384,9 +387,34 @@ pub async fn broadcast_published_pki_entities(
             );
         }
     }
+
+    if identity.is_voter() {
+        let my_pubkey = identity.verifying_key().to_bytes();
+        for vote in db.list_active_domain_votes(None, Some(&my_pubkey)) {
+            if let Ok(vote_payload) = serde_json::to_vec(&vote) {
+                let gossip_vote = GossipMessage::new(
+                    identity.signing_key(),
+                    vote.vote_seq,
+                    crate::net::gossip::DEFAULT_GOSSIP_TTL,
+                    crate::net::gossip::PAYLOAD_TYPE_VOTE,
+                    vote_payload,
+                );
+                router.broadcast(&gossip_vote, socket).await;
+                println!(
+                    "  -> Broadcasted Active Domain Vote #{} ({}) for `{}` (ID: {:02x?})",
+                    vote.vote_seq,
+                    vote.action,
+                    vote.domain,
+                    &gossip_vote.msg_id[..4]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_custodian;
+#[cfg(test)]
+mod tests_vote;

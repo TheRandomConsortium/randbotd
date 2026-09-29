@@ -4,3 +4,4 @@ pub mod custodian_subtable;
 pub mod offer_subtable;
 pub mod purge_subtable;
 pub mod rotation_subtable;
+pub mod vote_subtable;

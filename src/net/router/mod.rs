@@ -202,7 +202,12 @@ impl GossipRouter {
             );
 
             if let Ok(mut pb) = self.phonebook.write() {
-                pb.upsert_peer(&init.sender_pubkey, &src.to_string(), init.is_seed());
+                pb.upsert_peer_with_role(
+                    &init.sender_pubkey,
+                    &src.to_string(),
+                    init.is_seed(),
+                    init.is_headless(),
+                );
             }
 
             if let Some(id) = identity {
@@ -238,7 +243,12 @@ impl GossipRouter {
             );
 
             if let Ok(mut pb) = self.phonebook.write() {
-                pb.upsert_peer(&res.sender_pubkey, &src.to_string(), res.is_seed());
+                pb.upsert_peer_with_role(
+                    &res.sender_pubkey,
+                    &src.to_string(),
+                    res.is_seed(),
+                    res.is_headless(),
+                );
             }
 
             return Ok(None);
@@ -405,6 +415,10 @@ impl GossipRouter {
         } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_SWARM_ACTIVATION {
             if let Some(db) = &self.database {
                 broadcast::handle_swarm_activation_packet(&msg, db);
+            }
+        } else if msg.payload_type == crate::net::gossip::PAYLOAD_TYPE_VOTE {
+            if let Some(db) = &self.database {
+                broadcast::handle_vote_packet(&msg, db, &self.phonebook);
             }
         }
 

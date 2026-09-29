@@ -9,11 +9,8 @@ use crate::pki::cert::serial::CertificateSerialNumber;
 pub const MIN_DOMAIN_LENGTH: usize = 3;
 pub const MAX_DOMAIN_LENGTH: usize = 253;
 
-/// Baseline PoW difficulty in leading zero bits (fast for testing/CLI)
-pub const BASE_POW_DIFFICULTY: u32 = 12;
-
-/// Additional PoW difficulty in bits when purging unilaterally without external UTW strike evidence
-pub const UNILATERAL_PURGE_PENALTY_BITS: u32 = 4;
+pub mod pow;
+pub use pow::*;
 
 /// Standard reason classification for issuing a bad-domain purge (CA-07)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,6 +34,9 @@ pub struct DomainPurgeEvidence {
     pub description: String,
     pub strike_evidence: Option<String>,
     pub pow_nonce: u64,
+    /// Extra nonce for changing fields when cycling through 32-bit nonce space (defaults to 0 for retrocompatibility)
+    #[serde(default)]
+    pub extra_nonce: u64,
 }
 
 /// Authoritative, cryptographically chained bad-domain purge record (CA-07)
@@ -59,7 +59,7 @@ pub struct DomainPurgeRecord {
 }
 
 impl DomainPurgeRecord {
-    /// Constructs, signs, and seals a new DomainPurgeRecord
+    /// Constructs, signs, and seals a new DomainPurgeRecord (defaults extra_nonce to 0 for retrocompatibility)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ca_id: [u8; 32],
@@ -73,6 +73,40 @@ impl DomainPurgeRecord {
         description: String,
         strike_evidence: Option<String>,
         pow_nonce: u64,
+        signing_key: &SigningKey,
+    ) -> Result<Self, String> {
+        Self::new_with_extra_nonce(
+            ca_id,
+            domain,
+            serial_number,
+            purge_seq,
+            prev_purge_hash,
+            timestamp,
+            expires_at,
+            reason,
+            description,
+            strike_evidence,
+            pow_nonce,
+            0,
+            signing_key,
+        )
+    }
+
+    /// Constructs, signs, and seals a new DomainPurgeRecord with explicit extra_nonce
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_extra_nonce(
+        ca_id: [u8; 32],
+        domain: String,
+        serial_number: Option<CertificateSerialNumber>,
+        purge_seq: u64,
+        prev_purge_hash: [u8; 32],
+        timestamp: u64,
+        expires_at: u64,
+        reason: PurgeReason,
+        description: String,
+        strike_evidence: Option<String>,
+        pow_nonce: u64,
+        extra_nonce: u64,
         signing_key: &SigningKey,
     ) -> Result<Self, String> {
         validate_domain_name(&domain)?;
@@ -101,9 +135,9 @@ impl DomainPurgeRecord {
             description,
             strike_evidence,
             pow_nonce,
+            extra_nonce,
         };
 
-        // Data to sign: ca_id || domain || seq || prev_hash || timestamp || expires_at || nonce
         let sign_bytes = compute_sign_payload(
             &ca_id,
             &domain,
@@ -111,7 +145,7 @@ impl DomainPurgeRecord {
             &prev_purge_hash,
             timestamp,
             expires_at,
-            evidence.pow_nonce,
+            &evidence,
         );
 
         let sig = signing_key.sign(&sign_bytes);
@@ -162,7 +196,7 @@ impl DomainPurgeRecord {
             &self.prev_purge_hash,
             self.timestamp,
             self.expires_at,
-            self.evidence.pow_nonce,
+            &self.evidence,
         );
 
         verifying_key
@@ -288,12 +322,13 @@ impl DomainPurgeRecord {
         let required_difficulty =
             calculate_required_difficulty(active_unexpired_purges_before, has_strike_evidence);
 
-        let challenge = compute_purge_challenge(
+        let challenge = compute_purge_challenge_with_extra_nonce(
             &self.ca_id,
             &self.domain,
             self.timestamp,
             &self.prev_purge_hash,
             self.purge_seq,
+            self.evidence.extra_nonce,
         );
 
         if !verify_purge_pow(&challenge, self.evidence.pow_nonce, required_difficulty) {
@@ -347,56 +382,6 @@ pub fn validate_domain_name(domain: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Computes the unique challenge hash for a purge request PoW puzzle
-pub fn compute_purge_challenge(
-    ca_id: &[u8; 32],
-    domain: &str,
-    timestamp: u64,
-    prev_purge_hash: &[u8; 32],
-    purge_seq: u64,
-) -> [u8; 32] {
-    let ts_bytes = timestamp.to_be_bytes();
-    let seq_bytes = purge_seq.to_be_bytes();
-    crate::crypto::pow::PowEngine::compute_challenge(&[
-        b"randbotd_v1_purge_challenge",
-        ca_id,
-        domain.as_bytes(),
-        &ts_bytes,
-        prev_purge_hash,
-        &seq_bytes,
-    ])
-}
-
-/// Calculates required PoW difficulty in leading zero bits:
-/// D = BASE_POW_DIFFICULTY + 2 * log2(active_unexpired_purges + 1) + (0 if strike_evidence else 4)
-pub fn calculate_required_difficulty(
-    active_unexpired_purges: usize,
-    has_strike_evidence: bool,
-) -> u32 {
-    let penalty = if has_strike_evidence {
-        0
-    } else {
-        UNILATERAL_PURGE_PENALTY_BITS
-    };
-
-    crate::crypto::pow::calculate_logarithmic_difficulty(
-        BASE_POW_DIFFICULTY,
-        active_unexpired_purges,
-        2,
-        penalty,
-    )
-}
-
-/// Solves the PoW challenge by finding a nonce that achieves the required difficulty
-pub fn solve_purge_pow(challenge: &[u8; 32], difficulty: u32) -> u64 {
-    crate::crypto::pow::solve_pow(challenge, difficulty)
-}
-
-/// Verifies whether `nonce` produces at least `difficulty` leading zero bits on `challenge`
-pub fn verify_purge_pow(challenge: &[u8; 32], nonce: u64, difficulty: u32) -> bool {
-    crate::crypto::pow::verify_pow(challenge, nonce, difficulty)
-}
-
 pub use crate::crypto::pow::leading_zero_bits;
 
 fn compute_sign_payload(
@@ -406,7 +391,7 @@ fn compute_sign_payload(
     prev_purge_hash: &[u8; 32],
     timestamp: u64,
     expires_at: u64,
-    pow_nonce: u64,
+    evidence: &DomainPurgeEvidence,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"randbotd_v1_domain_purge");
@@ -416,7 +401,10 @@ fn compute_sign_payload(
     bytes.extend_from_slice(prev_purge_hash);
     bytes.extend_from_slice(&timestamp.to_be_bytes());
     bytes.extend_from_slice(&expires_at.to_be_bytes());
-    bytes.extend_from_slice(&pow_nonce.to_be_bytes());
+    bytes.extend_from_slice(&evidence.pow_nonce.to_be_bytes());
+    if evidence.extra_nonce != 0 {
+        bytes.extend_from_slice(&evidence.extra_nonce.to_be_bytes());
+    }
     bytes
 }
 

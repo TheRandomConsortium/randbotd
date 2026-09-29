@@ -9,6 +9,9 @@ use crate::proof::DomainNetworkType;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
 
+pub mod offer;
+pub use offer::OfferHandler;
+
 use super::{IpcContext, IpcHandler};
 
 /// IPC Handler responsible for CA publication, drafting, metadata validation, and entropy initialization

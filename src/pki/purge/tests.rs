@@ -258,3 +258,75 @@ fn test_non_owner_and_subtree_constraint_rejections() {
         .unwrap_err()
         .contains("violates CA subtree name constraints"));
 }
+
+#[test]
+fn test_domain_purge_extra_nonce_and_retrocompatibility() {
+    let key_bytes = [0x78u8; 32];
+    let owner_key = SigningKey::from_bytes(&key_bytes);
+    let owner_pubkey = owner_key.verifying_key().to_bytes();
+
+    let subject = CaSubjectMetadata {
+        common_name: "Purge Test Extra Nonce CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("ES".to_string()),
+        email: None,
+    };
+    let ca_id = compute_ca_id(&subject.common_name, &owner_pubkey);
+    let ca = CaDeclaration::new(
+        ca_id,
+        subject.clone(),
+        subject,
+        true,
+        Some(1),
+        vec!["hns".to_string()],
+        1000,
+        false,
+        vec![crate::proof::DomainNetworkType::Handshake],
+    )
+    .unwrap();
+
+    // 1. Solve with extra_nonce = 1 explicitly
+    let challenge =
+        compute_purge_challenge_with_extra_nonce(&ca_id, "test.hns", 1000, &[0u8; 32], 1, 1);
+    let nonce = solve_purge_pow(&challenge, 12);
+
+    let purge_with_extra = DomainPurgeRecord::new_with_extra_nonce(
+        ca_id,
+        "test.hns".to_string(),
+        None,
+        1,
+        [0u8; 32],
+        1000,
+        1500,
+        PurgeReason::TermsViolation,
+        "Policy breach".to_string(),
+        Some("evidence".to_string()),
+        nonce,
+        1, // extra_nonce = 1
+        &owner_key,
+    )
+    .unwrap();
+
+    assert_eq!(purge_with_extra.evidence.extra_nonce, 1);
+    assert!(purge_with_extra
+        .validate_against_ca_and_chain(&ca, &owner_pubkey, None, 0)
+        .is_ok());
+
+    // 2. Retrocompatibility: deserialize JSON without "extra_nonce" field
+    let mut val = serde_json::to_value(&purge_with_extra).unwrap();
+    val.get_mut("evidence")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("extra_nonce");
+
+    let legacy_json = serde_json::to_string(&val).unwrap();
+    assert!(!legacy_json.contains("extra_nonce"));
+
+    let deserialized: DomainPurgeRecord = serde_json::from_str(&legacy_json).unwrap();
+    // Must default to 0!
+    assert_eq!(deserialized.evidence.extra_nonce, 0);
+}

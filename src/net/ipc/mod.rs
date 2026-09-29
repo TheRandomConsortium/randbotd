@@ -198,6 +198,24 @@ pub enum IpcCommand {
         #[serde(default)]
         reason: Option<u8>,
     },
+    CastVote {
+        domain: String,
+        action: String,
+    },
+    GetVote {
+        domain: String,
+    },
+    ListVotes {
+        #[serde(default)]
+        domain: Option<String>,
+        #[serde(default)]
+        voter_hex: Option<String>,
+        #[serde(default)]
+        my_votes_only: Option<bool>,
+    },
+    BroadcastVote {
+        vote_id_hex: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,7 +328,9 @@ impl IpcServer {
                                                 | IpcCommand::IssueCrl { .. }
                                                 | IpcCommand::RevokeCert { .. }
                                                 | IpcCommand::BroadcastPurge { .. }
-                                                | IpcCommand::PurgeDomain { .. } => {
+                                                | IpcCommand::PurgeDomain { .. }
+                                                | IpcCommand::BroadcastVote { .. }
+                                                | IpcCommand::CastVote { .. } => {
                                                     if let Some(tx) = &b_tx {
                                                         let _ = tx.send(());
                                                     }

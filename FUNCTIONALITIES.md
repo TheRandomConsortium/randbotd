@@ -72,7 +72,7 @@ Implementation phases, ordered by dependency and foundational priority:
 | Feature ID | Module Name | Description | Status |
 | :--- | :--- | :--- | :---: |
 | `REP-01` | **Proof-of-Work Challenge Engine** | Modular, algorithm-agile PoW engine (`src/crypto/pow.rs`) supporting SHA-256 (extensible for Equihash). Enforces monotonic per-originator difficulty consensus: $D_{\text{vote}} = D_{\text{base}} + 2 \cdot \lfloor\log_2(N_{\text{active\_votes}} + 1)\rfloor + P_{\text{flip}}(\text{revisions\_on\_domain})$, binding challenges to $(originator \parallel prev\_hash \parallel domain \parallel vote\_action \parallel seq)$ to eliminate pre-mining and Sybil review-bombing without needing a global linear blockchain. Shared across Domain Purge (`CA-07`), Voting (`REP-02`), and CA Flagging (`REP-08`). | 🟢 |
-| `REP-02` | **1-Vote-Per-Node Dynamic Voting** | State machine enforcing 1 active vote per node per domain with real-time mind-changing support. | 🔴 |
+| `REP-02` | **1-Vote-Per-Node Dynamic Voting** | State machine enforcing 1 active vote per node per domain with real-time mind-changing support. | 🟢 |
 | `REP-03` | **Behavioral Score & Weight Ponderation** | Historical voter reputation engine scaling down voting power for detected review-bombers/Sybil nodes. | 🔴 |
 | `REP-04` | **Lazy Evaluation Engine** | On-demand computation of domain/CA trust scores and $\Delta$ windows. Automatically rescales $\Delta$ when active network node count $N_{\text{active\_nodes}}$ expands. | 🔴 |
 | `REP-05` | **CA Rating Propagation Engine** | Calculation of a CA's public rating as the weighted average of trust scores of all issued domains. | 🔴 |

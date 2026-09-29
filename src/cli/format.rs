@@ -146,3 +146,80 @@ fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     }
 }
+
+pub fn print_vote_status(json_str: &str, as_json: bool) {
+    if as_json {
+        println!("{}", json_str);
+        return;
+    }
+    if let Ok(val) = serde_json::from_str::<Value>(json_str) {
+        let domain = val["domain"].as_str().unwrap_or("-");
+        let has_voted = val["has_voted"].as_bool().unwrap_or(false);
+        let revs = val["revisions_on_domain"].as_u64().unwrap_or(0);
+        let total = val["total_active_votes"].as_u64().unwrap_or(0);
+        let tw = val["tw_count"].as_u64().unwrap_or(0);
+        let utw = val["utw_count"].as_u64().unwrap_or(0);
+
+        println!("\n⚖️ Domain Reputation Vote Status: {}", domain);
+        println!("==================================================");
+        println!(
+            "  Have We Voted:       {}",
+            if has_voted { "YES" } else { "NO" }
+        );
+        if has_voted {
+            let action = val["my_vote"]["action"].as_str().unwrap_or("-");
+            let seq = val["my_vote"]["vote_seq"].as_u64().unwrap_or(0);
+            println!("  Our Active Vote:     {}", action);
+            println!("  Vote Sequence:       #{}", seq);
+            println!("  Revision Count:      {}", revs);
+        }
+        println!("--------------------------------------------------");
+        println!("  Total Network Votes: {}", total);
+        println!("  TW (Trustworthy):    {}", tw);
+        println!("  UTW (Untrustworthy): {}", utw);
+        println!("==================================================\n");
+    } else {
+        println!("{}", json_str);
+    }
+}
+
+pub fn print_votes(json_str: &str, as_json: bool) {
+    if as_json {
+        println!("{}", json_str);
+        return;
+    }
+    if let Ok(Value::Array(votes)) = serde_json::from_str::<Value>(json_str) {
+        if votes.is_empty() {
+            println!("No active domain votes found.");
+            return;
+        }
+        println!("\n🗳️ Active Domain Reputation Votes ({})", votes.len());
+        println!(
+            "┌─────────────────────────────┬────────┬──────┬────────────┬────────────────────────┐"
+        );
+        println!(
+            "│ Domain                      │ Action │ Seq  │ Revisions  │ Nonce                  │"
+        );
+        println!(
+            "├─────────────────────────────┼────────┼──────┼────────────┼────────────────────────┤"
+        );
+        for v in votes {
+            let domain = v["domain"].as_str().unwrap_or("-");
+            let action = v["action"].as_str().unwrap_or("-");
+            let seq = v["vote_seq"].as_u64().unwrap_or(0);
+            let revs = v["revisions_on_domain"].as_u64().unwrap_or(0);
+            let nonce = v["nonce"].as_u64().unwrap_or(0);
+            println!(
+                "│ {:<27} │ {:<6} │ {:<4} │ {:<10} │ 0x{:<20x} │",
+                truncate(domain, 27),
+                action,
+                seq,
+                revs,
+                nonce,
+            );
+        }
+        println!("└─────────────────────────────┴────────┴──────┴────────────┴────────────────────────┘\n");
+    } else {
+        println!("{}", json_str);
+    }
+}

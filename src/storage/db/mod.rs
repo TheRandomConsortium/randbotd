@@ -32,6 +32,7 @@ pub struct Database {
     rotation_file_path: PathBuf,
     custodians_file_path: PathBuf,
     policies_file_path: PathBuf,
+    vote_file_path: PathBuf,
     event_log: RwLock<Vec<EventLogEntry>>,
     pending_unverified: PendingStagingMap,
     sync_offset: AtomicUsize,
@@ -48,6 +49,7 @@ pub struct Database {
     custodian_store:
         RwLock<std::collections::HashMap<[u8; 32], Vec<crate::pki::swarm::CustodianSwarmRecord>>>,
     policy_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::swarm::CaCustodianPolicy>>,
+    vote_store: RwLock<std::collections::HashMap<[u8; 32], crate::crypto::vote::VoteRecord>>,
     distrust_store: RwLock<std::collections::HashMap<[u8; 32], u32>>,
 }
 
@@ -70,6 +72,7 @@ impl Database {
         let rotation_file_path = state_dir.join("key_rotations.json");
         let custodians_file_path = state_dir.join("custodians.json");
         let policies_file_path = state_dir.join("ca_custodian_policies.json");
+        let vote_file_path = state_dir.join("domain_votes.json");
         let mut entries = Vec::new();
 
         if db_file_path.exists() {
@@ -119,6 +122,7 @@ impl Database {
         let loaded_rotations = ca_subtable::load_hex_map_from_disk(&rotation_file_path)?;
         let loaded_custodians = ca_subtable::load_hex_map_from_disk(&custodians_file_path)?;
         let loaded_policies = ca_subtable::load_hex_map_from_disk(&policies_file_path)?;
+        let loaded_votes = ca_subtable::load_hex_map_from_disk(&vote_file_path)?;
 
         Ok(Self {
             db_file_path,
@@ -131,6 +135,7 @@ impl Database {
             rotation_file_path,
             custodians_file_path,
             policies_file_path,
+            vote_file_path,
             event_log: RwLock::new(entries),
             pending_unverified: RwLock::new(std::collections::HashMap::new()),
             sync_offset: AtomicUsize::new(initial_offset),
@@ -143,6 +148,7 @@ impl Database {
             rotation_store: RwLock::new(loaded_rotations),
             custodian_store: RwLock::new(loaded_custodians),
             policy_store: RwLock::new(loaded_policies),
+            vote_store: RwLock::new(loaded_votes),
             distrust_store: RwLock::new(std::collections::HashMap::new()),
         })
     }

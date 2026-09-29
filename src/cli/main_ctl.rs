@@ -1,7 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use randbotd::cli::client::{resolve_socket_path, send_command};
 use randbotd::cli::dashboard::run_dashboard_server;
-use randbotd::cli::format::{print_cas, print_offers, print_peers, print_status};
+use randbotd::cli::format::{
+    print_cas, print_offers, print_peers, print_status, print_vote_status, print_votes,
+};
 use randbotd::net::ipc::IpcCommand;
 use randbotd::proof::DomainNetworkType;
 
@@ -64,6 +66,12 @@ enum Commands {
     Swarm {
         #[command(subcommand)]
         command: SwarmCommands,
+    },
+
+    /// Cast and query dynamic domain reputation votes (REP-02)
+    Vote {
+        #[command(subcommand)]
+        command: VoteCommands,
     },
 
     /// Launch the interactive localhost CA Command Center Web Dashboard (CA-06)
@@ -191,6 +199,40 @@ enum SwarmCommands {
         /// Target CA ID hex
         ca_id: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum VoteCommands {
+    /// Cast a dynamic reputation vote for a domain (TW or UTW)
+    Cast(VoteCastArgs),
+    /// Retrieve vote status and whether this node already voted for a domain
+    Get {
+        /// Fully-qualified domain name to inspect
+        #[arg(long)]
+        domain: String,
+    },
+    /// List active domain reputation votes
+    List {
+        /// Optional domain filter
+        #[arg(long)]
+        domain: Option<String>,
+        /// Optional voter public key filter in hex
+        #[arg(long)]
+        voter: Option<String>,
+        /// Filter to only votes cast by this node
+        #[arg(long)]
+        my_votes: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+struct VoteCastArgs {
+    /// Fully-qualified domain name to vote on
+    #[arg(long)]
+    domain: String,
+    /// Vote action: TW (Trustworthy) or UTW (Untrustworthy)
+    #[arg(long)]
+    action: String,
 }
 
 #[derive(Args, Debug)]
@@ -365,6 +407,48 @@ async fn main() {
                 .await
                 {
                     Ok(resp) => println!("{}", resp),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
+        Commands::Vote { command } => match command {
+            VoteCommands::Cast(v) => {
+                let cmd = IpcCommand::CastVote {
+                    domain: v.domain,
+                    action: v.action,
+                };
+                match send_command(&socket_path, cmd).await {
+                    Ok(resp) => println!("✓ {}", resp),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            VoteCommands::Get { domain } => {
+                match send_command(&socket_path, IpcCommand::GetVote { domain }).await {
+                    Ok(resp) => print_vote_status(&resp, args.json),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            VoteCommands::List {
+                domain,
+                voter,
+                my_votes,
+            } => {
+                let cmd = IpcCommand::ListVotes {
+                    domain,
+                    voter_hex: voter,
+                    my_votes_only: if my_votes { Some(true) } else { None },
+                };
+                match send_command(&socket_path, cmd).await {
+                    Ok(resp) => print_votes(&resp, args.json),
                     Err(e) => {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);

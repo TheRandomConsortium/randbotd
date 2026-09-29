@@ -11,7 +11,7 @@ use crypto::identity::init_node_identity;
 use net::frame::validate_magic_bytes;
 use net::gossip::{
     AddressAnnouncementPayload, GossipMessage, DEFAULT_GOSSIP_TTL,
-    PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT, PAYLOAD_TYPE_PING, PAYLOAD_TYPE_VOTE,
+    PAYLOAD_TYPE_ADDRESS_ANNOUNCEMENT, PAYLOAD_TYPE_PING,
 };
 use net::handshake::HandshakeInit;
 use net::nat::{diagnose_nat_reachability, NatStatus};
@@ -448,21 +448,6 @@ async fn main() {
             ext_addr
         );
     }
-
-    // 8. Demonstrate Vote Gossip & CA Declaration Relaying
-    let vote_payload = b"Vote_TW:domain=randbot.hns:pow_nonce=0x4a91b".to_vec();
-    let gossip_vote = GossipMessage::new(
-        identity.signing_key(),
-        2,
-        DEFAULT_GOSSIP_TTL,
-        PAYLOAD_TYPE_VOTE,
-        vote_payload,
-    );
-    router.broadcast(&gossip_vote, &socket).await;
-    println!(
-        "  -> Broadcasted Signed Gossip Vote (ID: {:02x?})",
-        &gossip_vote.msg_id[..4]
-    );
 
     // CA-04: Automated broadcast of published non-draft CAs, certificate chains, and CRLs
     net::router::broadcast::broadcast_published_pki_entities(&router, &db, &identity, &socket)

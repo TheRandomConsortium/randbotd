@@ -21,6 +21,9 @@ pub struct PeerEntry {
     pub verified_seed: bool,
     /// Behavioral ponderation / Web-of-Trust score (0 to 100). Reserved for `REP-03`.
     pub ponderation_score: u32,
+    /// Whether this peer operates as an infrastructure / headless node (cannot vote)
+    #[serde(default)]
+    pub is_headless: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,7 +85,13 @@ impl Phonebook {
         }
     }
 
-    pub fn upsert_peer(&mut self, pubkey: &[u8; 32], address: &str, self_declared_seed: bool) {
+    pub fn upsert_peer_with_role(
+        &mut self,
+        pubkey: &[u8; 32],
+        address: &str,
+        self_declared_seed: bool,
+        is_headless: bool,
+    ) {
         if pubkey == &[0u8; 32] {
             return;
         }
@@ -105,9 +114,24 @@ impl Phonebook {
             self_declared_seed,
             verified_seed: is_currently_verified,
             ponderation_score: 50,
+            is_headless,
         };
         self.peers.insert(address.to_string(), entry);
         self.auto_save();
+    }
+
+    pub fn upsert_peer(&mut self, pubkey: &[u8; 32], address: &str, self_declared_seed: bool) {
+        self.upsert_peer_with_role(pubkey, address, self_declared_seed, false);
+    }
+
+    pub fn is_peer_headless(&self, pubkey: &[u8; 32]) -> bool {
+        let pubkey_hex = hex_encode(pubkey);
+        for entry in self.peers.values() {
+            if entry.pubkey_hex == pubkey_hex {
+                return entry.is_headless;
+            }
+        }
+        false
     }
 
     pub fn resolve_peer_addresses(&self) -> Vec<std::net::SocketAddr> {

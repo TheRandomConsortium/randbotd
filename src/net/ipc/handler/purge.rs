@@ -6,7 +6,7 @@ use crate::net::ipc::{IpcCommand, IpcResponse};
 use crate::pki::ca::compute_ca_id;
 use crate::pki::cert::serial::CertificateSerialNumber;
 use crate::pki::purge::{
-    calculate_required_difficulty, compute_purge_challenge, solve_purge_pow, validate_domain_name,
+    calculate_required_difficulty, solve_purge_pow_with_changing_field, validate_domain_name,
     DomainPurgeRecord, PurgeReason,
 };
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
@@ -179,14 +179,19 @@ impl PurgeHandler {
             .unwrap_or(false);
         let difficulty = calculate_required_difficulty(active_unexpired_count, has_strike);
 
-        let challenge = compute_purge_challenge(&ca_id, domain, now, &prev_purge_hash, purge_seq);
-
-        let pow_nonce = solve_purge_pow(&challenge, difficulty);
+        let (pow_nonce, extra_nonce) = solve_purge_pow_with_changing_field(
+            &ca_id,
+            domain,
+            now,
+            &prev_purge_hash,
+            purge_seq,
+            difficulty,
+        );
 
         // Sign with the node identity key (authoritative CA owner key)
         let signing_key = node_id.signing_key();
 
-        let record = match DomainPurgeRecord::new(
+        let record = match DomainPurgeRecord::new_with_extra_nonce(
             ca_id,
             domain.to_string(),
             serial_number,
@@ -198,6 +203,7 @@ impl PurgeHandler {
             description.to_string(),
             strike_evidence.map(|s| s.to_string()),
             pow_nonce,
+            extra_nonce,
             signing_key,
         ) {
             Ok(r) => r,

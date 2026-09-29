@@ -1,20 +1,20 @@
 pub mod ca;
 pub mod crl;
 pub mod custodian;
-pub mod offer;
 pub mod peer;
 pub mod proof;
 pub mod purge;
 pub mod rotation;
+pub mod vote;
 
-pub use ca::CaHandler;
+pub use ca::{CaHandler, OfferHandler};
 pub use crl::CrlHandler;
 pub use custodian::CustodianHandler;
-pub use offer::OfferHandler;
 pub use peer::PeerHandler;
 pub use proof::ProofHandler;
 pub use purge::PurgeHandler;
 pub use rotation::RotationHandler;
+pub use vote::VoteHandler;
 
 use crate::crypto::identity::NodeIdentity;
 use crate::net::ipc::{IpcCommand, IpcResponse};
@@ -85,6 +85,7 @@ impl IpcHandlerRegistry {
                 Box::new(PurgeHandler),
                 Box::new(RotationHandler),
                 Box::new(CustodianHandler),
+                Box::new(VoteHandler),
             ],
         }
     }
