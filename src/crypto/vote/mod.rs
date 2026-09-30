@@ -366,5 +366,12 @@ pub fn calculate_vote_difficulty(active_votes: usize, revisions_on_domain: usize
     PowEngine::calculate_logarithmic_difficulty(DEFAULT_BASE_DIFFICULTY, active_votes, 2, penalty)
 }
 
+pub mod ponderation;
+pub use ponderation::{
+    PonderationBreakdown, PonderationEngine, PonderationInputs, PONDERATION_BASELINE_SCORE,
+};
+
+#[cfg(test)]
+mod ponderation_tests;
 #[cfg(test)]
 mod tests;
