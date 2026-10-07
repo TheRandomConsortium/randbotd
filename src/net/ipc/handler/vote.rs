@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::crypto::identity::NodeIdentity;
 use crate::crypto::vote::{VoteAction, VoteRecord};
 use crate::net::ipc::{IpcCommand, IpcResponse};
+use crate::net::phonebook::Phonebook;
 use crate::pki::purge::validate_domain_name;
 use crate::storage::db::ca_subtable::{bytes32_to_hex, hex_to_bytes32};
 use crate::storage::db::Database;
@@ -16,9 +17,13 @@ pub struct VoteHandler;
 impl IpcHandler for VoteHandler {
     fn handle(&self, command: &IpcCommand, ctx: &IpcContext) -> Option<IpcResponse> {
         match command {
-            IpcCommand::CastVote { domain, action } => {
-                Some(Self::handle_cast_vote(domain, action, ctx.db, ctx.identity))
-            }
+            IpcCommand::CastVote { domain, action } => Some(Self::handle_cast_vote(
+                domain,
+                action,
+                ctx.db,
+                ctx.identity,
+                Some(ctx.phonebook),
+            )),
             IpcCommand::GetVote { domain } => {
                 Some(Self::handle_get_vote(domain, ctx.db, ctx.identity))
             }
@@ -36,6 +41,11 @@ impl IpcHandler for VoteHandler {
             IpcCommand::BroadcastVote { vote_id_hex } => {
                 Some(Self::handle_broadcast_vote(vote_id_hex, ctx.db))
             }
+            IpcCommand::GetDomainTrust { domain } => Some(Self::handle_get_domain_trust(
+                domain,
+                ctx.db,
+                Some(ctx.phonebook),
+            )),
             _ => None,
         }
     }
@@ -47,6 +57,7 @@ impl VoteHandler {
         action_str: &str,
         db: Option<&Arc<Database>>,
         identity: Option<&NodeIdentity>,
+        phonebook: Option<&Arc<RwLock<Phonebook>>>,
     ) -> IpcResponse {
         let database = match db {
             Some(d) => d,
@@ -131,10 +142,44 @@ impl VoteHandler {
             };
         }
 
+        // REP-04 Write Path: compute voter ponderation and record in profile
+        let _ = database
+            .compute_and_update_voter_ponderation(&voter_pubkey, phonebook.map(|p| p.as_ref()));
+
         match serde_json::to_string_pretty(&vote) {
             Ok(json_str) => IpcResponse::Ok { message: json_str },
             Err(e) => IpcResponse::Error {
                 reason: format!("Failed to serialize vote: {}", e),
+            },
+        }
+    }
+
+    pub fn handle_get_domain_trust(
+        domain: &str,
+        db: Option<&Arc<Database>>,
+        phonebook: Option<&Arc<RwLock<Phonebook>>>,
+    ) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is uninitialized".to_string(),
+                }
+            }
+        };
+
+        let clean_domain = domain.trim().to_ascii_lowercase();
+        if let Err(e) = validate_domain_name(&clean_domain) {
+            return IpcResponse::Error {
+                reason: format!("Invalid domain name `{}`: {}", clean_domain, e),
+            };
+        }
+
+        let eval = database.evaluate_domain_trust(&clean_domain, phonebook.map(|p| p.as_ref()));
+        match serde_json::to_string_pretty(&eval) {
+            Ok(json_str) => IpcResponse::Ok { message: json_str },
+            Err(e) => IpcResponse::Error {
+                reason: format!("Failed to serialize domain trust evaluation: {}", e),
             },
         }
     }
@@ -325,6 +370,24 @@ mod tests {
                 assert_eq!(status.utw_count, 1);
             }
             _ => panic!("Expected Ok response"),
+        }
+
+        // 6. GetDomainTrust evaluates trust lazily in O(n)
+        let trust_cmd = IpcCommand::GetDomainTrust {
+            domain: "banana.rand".to_string(),
+        };
+        let resp_trust = handler.handle(&trust_cmd, &ctx).unwrap();
+        match resp_trust {
+            IpcResponse::Ok { message } => {
+                let eval: crate::crypto::vote::DomainTrustEvaluation =
+                    serde_json::from_str(&message).unwrap();
+                assert_eq!(eval.domain, "banana.rand");
+                assert_eq!(eval.total_active_votes, 1);
+                assert_eq!(eval.tw_votes_count, 0);
+                assert_eq!(eval.utw_votes_count, 1);
+                assert_eq!(eval.trust_score, 0.0);
+            }
+            _ => panic!("Expected Ok response for GetDomainTrust"),
         }
 
         let _ = std::fs::remove_dir_all(&temp_dir);

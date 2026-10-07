@@ -183,6 +183,42 @@ pub fn print_vote_status(json_str: &str, as_json: bool) {
     }
 }
 
+pub fn print_domain_trust(json_str: &str, as_json: bool) {
+    if as_json {
+        println!("{}", json_str);
+        return;
+    }
+    if let Ok(val) = serde_json::from_str::<Value>(json_str) {
+        let domain = val["domain"].as_str().unwrap_or("-");
+        let score = val["trust_score"].as_f64().unwrap_or(50.0);
+        let delta = val["delta"].as_f64().unwrap_or(50.0);
+        let lower = val["lower_bound"].as_f64().unwrap_or(0.0);
+        let upper = val["upper_bound"].as_f64().unwrap_or(100.0);
+        let total = val["total_active_votes"].as_u64().unwrap_or(0);
+        let tw = val["tw_votes_count"].as_u64().unwrap_or(0);
+        let utw = val["utw_votes_count"].as_u64().unwrap_or(0);
+        let tw_w = val["tw_voter_weight"].as_f64().unwrap_or(0.0);
+        let utw_w = val["utw_voter_weight"].as_f64().unwrap_or(0.0);
+        let total_weight = val["total_voter_weight"].as_f64().unwrap_or(0.0);
+        let nodes = val["network_active_nodes"].as_u64().unwrap_or(1);
+
+        println!("\n⚖️ Domain Lazy Trust Evaluation: {}", domain);
+        println!("==================================================");
+        println!("  Trust Score:         {:.1}%", score);
+        println!("  Dynamic Delta:       ±{:.1}%", delta);
+        println!("  Confidence Bounds:   [{:.1}%, {:.1}%]", lower, upper);
+        println!("--------------------------------------------------");
+        println!("  Active Domain Votes: {}", total);
+        println!("  TW Votes / Weight:   {} ({:.1})", tw, tw_w);
+        println!("  UTW Votes / Weight:  {} ({:.1})", utw, utw_w);
+        println!("  Total Voter Weight:  {:.1}", total_weight);
+        println!("  Network Active Nodes:{}", nodes);
+        println!("==================================================\n");
+    } else {
+        println!("{}", json_str);
+    }
+}
+
 pub fn print_votes(json_str: &str, as_json: bool) {
     if as_json {
         println!("{}", json_str);

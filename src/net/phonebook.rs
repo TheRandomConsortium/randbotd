@@ -134,6 +134,67 @@ impl Phonebook {
         false
     }
 
+    /// Updates the behavioral ponderation score (0 to 100) for a peer identified by pubkey (REP-04)
+    pub fn update_peer_ponderation(&mut self, pubkey: &[u8; 32], score: u32) -> bool {
+        let pk_hex = hex_encode(pubkey);
+        let mut updated = false;
+        for entry in self.peers.values_mut() {
+            if entry.pubkey_hex == pk_hex {
+                entry.ponderation_score = score.min(100);
+                updated = true;
+            }
+        }
+        if updated {
+            self.auto_save();
+        }
+        updated
+    }
+
+    /// Retrieves the cached ponderation score for a peer, returning default baseline 50 if unknown
+    pub fn get_peer_ponderation(&self, pubkey: &[u8; 32]) -> u32 {
+        let pk_hex = hex_encode(pubkey);
+        for entry in self.peers.values() {
+            if entry.pubkey_hex == pk_hex {
+                return entry.ponderation_score;
+            }
+        }
+        50
+    }
+
+    /// Returns all known peer pubkeys classified as high ponderation (score >= 70)
+    pub fn high_ponderation_peers(&self) -> Vec<[u8; 32]> {
+        let mut result = Vec::new();
+        for entry in self.peers.values() {
+            if entry.ponderation_score >= 70 {
+                if let Ok(bytes) = hex::decode(&entry.pubkey_hex) {
+                    if bytes.len() == 32 {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&bytes);
+                        result.push(arr);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Returns all known peer pubkeys classified as low ponderation (score <= 30)
+    pub fn low_ponderation_peers(&self) -> Vec<[u8; 32]> {
+        let mut result = Vec::new();
+        for entry in self.peers.values() {
+            if entry.ponderation_score <= 30 {
+                if let Ok(bytes) = hex::decode(&entry.pubkey_hex) {
+                    if bytes.len() == 32 {
+                        let mut arr = [0u8; 32];
+                        arr.copy_from_slice(&bytes);
+                        result.push(arr);
+                    }
+                }
+            }
+        }
+        result
+    }
+
     pub fn resolve_peer_addresses(&self) -> Vec<std::net::SocketAddr> {
         let mut addrs = Vec::new();
         for entry in self.peers.values() {

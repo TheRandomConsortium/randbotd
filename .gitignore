@@ -2,5 +2,7 @@
 /build_temp/
 *.deb
 *.enc
+*.AppImage
 randbotd.list
 ca_declarations.json
+

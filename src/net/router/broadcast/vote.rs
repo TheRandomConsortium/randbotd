@@ -87,6 +87,9 @@ pub fn handle_vote_packet(
         return;
     }
 
+    // REP-04 Write Path: compute voter ponderation and record in profile
+    let _ = db.compute_and_update_voter_ponderation(&vote.voter_pubkey, Some(phonebook));
+
     println!(
         "  🗳️ [P2P Vote] Ingested verified Vote #{} ({}) for `{}` from {:02x?}",
         vote.vote_seq,

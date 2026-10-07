@@ -238,6 +238,18 @@ impl Database {
         }
     }
 
+    /// Checks if a node has committed proven Byzantine double-signing / equivocation
+    pub fn is_equivocator(&self, originator: &[u8; 32]) -> bool {
+        if let Ok(log) = self.event_log.read() {
+            log.iter().any(|e| {
+                &e.originator == originator
+                    && e.payload_type == crate::net::gossip::PAYLOAD_TYPE_EQUIVOCATION_PROOF
+            })
+        } else {
+            false
+        }
+    }
+
     /// Appends a verified consensus EventLogEntry to the database (with out-of-order staging, truth resolution & equivocation proofs)
     pub fn append_event(&self, entry: EventLogEntry) -> Result<(), String> {
         if EventLogEntry::is_transient(entry.payload_type) {

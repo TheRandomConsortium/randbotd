@@ -216,6 +216,9 @@ pub enum IpcCommand {
     BroadcastVote {
         vote_id_hex: String,
     },
+    GetDomainTrust {
+        domain: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

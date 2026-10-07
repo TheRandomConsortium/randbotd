@@ -2,7 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use randbotd::cli::client::{resolve_socket_path, send_command};
 use randbotd::cli::dashboard::run_dashboard_server;
 use randbotd::cli::format::{
-    print_cas, print_offers, print_peers, print_status, print_vote_status, print_votes,
+    print_cas, print_domain_trust, print_offers, print_peers, print_status, print_vote_status,
+    print_votes,
 };
 use randbotd::net::ipc::IpcCommand;
 use randbotd::proof::DomainNetworkType;
@@ -208,6 +209,12 @@ enum VoteCommands {
     /// Retrieve vote status and whether this node already voted for a domain
     Get {
         /// Fully-qualified domain name to inspect
+        #[arg(long)]
+        domain: String,
+    },
+    /// Evaluate domain trust score and dynamic Delta window (REP-04)
+    Trust {
+        /// Fully-qualified domain name to evaluate
         #[arg(long)]
         domain: String,
     },
@@ -431,6 +438,15 @@ async fn main() {
             VoteCommands::Get { domain } => {
                 match send_command(&socket_path, IpcCommand::GetVote { domain }).await {
                     Ok(resp) => print_vote_status(&resp, args.json),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            VoteCommands::Trust { domain } => {
+                match send_command(&socket_path, IpcCommand::GetDomainTrust { domain }).await {
+                    Ok(resp) => print_domain_trust(&resp, args.json),
                     Err(e) => {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);

@@ -65,7 +65,7 @@ for file in "${UNIQUE_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         continue
     fi
-    if [[ "$file" == *".git"* || "$file" == *"target"* || "$file" == *"build_temp"* || "$file" == *"Cargo.lock"* || "$file" == *".deb"* || "$file" == *".png"* || "$file" == *".jpg"* || "$file" == *".ico"* || "$file" == *".so"* || "$file" == *".a"* ]]; then
+    if [[ "$file" == *".git"* || "$file" == *"target"* || "$file" == *"build_temp"* || "$file" == *"Cargo.lock"* || "$file" == *".deb"* || "$file" == *".AppImage"* || "$file" == *".png"* || "$file" == *".jpg"* || "$file" == *".ico"* || "$file" == *".so"* || "$file" == *".a"* ]]; then
         continue
     fi
     lines=$(wc -l < "$file" 2>/dev/null || echo 0)
