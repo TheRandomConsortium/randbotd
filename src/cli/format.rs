@@ -219,6 +219,46 @@ pub fn print_domain_trust(json_str: &str, as_json: bool) {
     }
 }
 
+pub fn print_ca_rating(json_str: &str, as_json: bool) {
+    if as_json {
+        println!("{}", json_str);
+        return;
+    }
+    if let Ok(val) = serde_json::from_str::<Value>(json_str) {
+        let cn = val["common_name"].as_str().unwrap_or("-");
+        let ca_id_hex = val["ca_id_hex"].as_str().unwrap_or("-");
+        let rating = val["rating"].as_f64().unwrap_or(50.0);
+        let delta = val["delta"].as_f64().unwrap_or(50.0);
+        let lower = val["lower_bound"].as_f64().unwrap_or(0.0);
+        let upper = val["upper_bound"].as_f64().unwrap_or(100.0);
+        let total_domains = val["total_issued_domains"].as_u64().unwrap_or(0);
+        let active_domains = val["active_domains_count"].as_u64().unwrap_or(0);
+        let purged_domains = val["purged_domains_count"].as_u64().unwrap_or(0);
+        let revoked_domains = val["revoked_domains_count"].as_u64().unwrap_or(0);
+        let total_votes = val["total_ca_votes"].as_u64().unwrap_or(0);
+        let total_weight = val["total_ca_weight"].as_f64().unwrap_or(0.0);
+        let nodes = val["network_active_nodes"].as_u64().unwrap_or(1);
+
+        println!("\n🏛️ CA Public Reputation Rating (REP-05): {}", cn);
+        println!("==================================================");
+        println!("  CA ID:               {}", truncate(ca_id_hex, 32));
+        println!("  Public Rating:       {:.1}%", rating);
+        println!("  Dynamic Delta:       ±{:.1}%", delta);
+        println!("  Confidence Bounds:   [{:.1}%, {:.1}%]", lower, upper);
+        println!("--------------------------------------------------");
+        println!("  Total Issued Domains:{}", total_domains);
+        println!("  Active Domains:      {}", active_domains);
+        println!("  Purged Domains:      {} (REP-06 cleaned)", purged_domains);
+        println!("  Revoked Domains:     {}", revoked_domains);
+        println!("  Total CA Votes:      {}", total_votes);
+        println!("  Total CA Weight:     {:.1}", total_weight);
+        println!("  Network Active Nodes:{}", nodes);
+        println!("==================================================\n");
+    } else {
+        println!("{}", json_str);
+    }
+}
+
 pub fn print_votes(json_str: &str, as_json: bool) {
     if as_json {
         println!("{}", json_str);

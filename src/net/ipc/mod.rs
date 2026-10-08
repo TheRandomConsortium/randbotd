@@ -219,6 +219,9 @@ pub enum IpcCommand {
     GetDomainTrust {
         domain: String,
     },
+    GetCaRating {
+        ca_id_hex: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

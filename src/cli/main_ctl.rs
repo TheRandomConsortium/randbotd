@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use randbotd::cli::client::{resolve_socket_path, send_command};
 use randbotd::cli::dashboard::run_dashboard_server;
 use randbotd::cli::format::{
-    print_cas, print_domain_trust, print_offers, print_peers, print_status, print_vote_status,
-    print_votes,
+    print_ca_rating, print_cas, print_domain_trust, print_offers, print_peers, print_status,
+    print_vote_status, print_votes,
 };
 use randbotd::net::ipc::IpcCommand;
 use randbotd::proof::DomainNetworkType;
@@ -85,6 +85,11 @@ enum CaCommands {
     List,
     /// Get details of a specific CA by hex ID
     Get {
+        /// CA ID in 64-character hexadecimal
+        ca_id: String,
+    },
+    /// Get real-time public rating and dynamic Delta window of a CA (REP-05)
+    Rating {
         /// CA ID in 64-character hexadecimal
         ca_id: String,
     },
@@ -283,6 +288,16 @@ async fn main() {
             CaCommands::Get { ca_id } => {
                 match send_command(&socket_path, IpcCommand::GetCa { ca_id_hex: ca_id }).await {
                     Ok(resp) => println!("{}", resp),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            CaCommands::Rating { ca_id } => {
+                match send_command(&socket_path, IpcCommand::GetCaRating { ca_id_hex: ca_id }).await
+                {
+                    Ok(resp) => print_ca_rating(&resp, args.json),
                     Err(e) => {
                         eprintln!("Error: {}", e);
                         std::process::exit(1);

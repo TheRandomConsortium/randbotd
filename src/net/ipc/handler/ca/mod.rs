@@ -53,6 +53,11 @@ impl IpcHandler for CaHandler {
             )),
             IpcCommand::ListCas => Some(Self::handle_list_cas(ctx.db)),
             IpcCommand::GetCa { ca_id_hex } => Some(Self::handle_get_ca(ca_id_hex, ctx.db)),
+            IpcCommand::GetCaRating { ca_id_hex } => Some(Self::handle_get_ca_rating(
+                ca_id_hex,
+                Some(ctx.phonebook.as_ref()),
+                ctx.db,
+            )),
             _ => None,
         }
     }
@@ -239,6 +244,36 @@ impl CaHandler {
             None => IpcResponse::Error {
                 reason: format!("CA declaration `{}` not found", ca_id_hex),
             },
+        }
+    }
+
+    pub fn handle_get_ca_rating(
+        ca_id_hex: &str,
+        phonebook: Option<&RwLock<Phonebook>>,
+        db: Option<&Arc<Database>>,
+    ) -> IpcResponse {
+        let database = match db {
+            Some(d) => d,
+            None => {
+                return IpcResponse::Error {
+                    reason: "Database is uninitialized".to_string(),
+                }
+            }
+        };
+
+        let ca_id = match hex_to_bytes32(ca_id_hex) {
+            Ok(id) => id,
+            Err(e) => return IpcResponse::Error { reason: e },
+        };
+
+        match database.evaluate_ca_rating(&ca_id, phonebook) {
+            Ok(rating_eval) => match serde_json::to_string_pretty(&rating_eval) {
+                Ok(json_str) => IpcResponse::Ok { message: json_str },
+                Err(e) => IpcResponse::Error {
+                    reason: format!("Failed to serialize CA rating evaluation: {}", e),
+                },
+            },
+            Err(e) => IpcResponse::Error { reason: e },
         }
     }
 }

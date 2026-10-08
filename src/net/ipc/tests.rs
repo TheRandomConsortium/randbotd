@@ -391,3 +391,84 @@ async fn test_ipc_ca06_command_center_endpoints_roundtrip() {
     handle.abort();
     let _ = std::fs::remove_dir_all(temp_dir);
 }
+
+#[tokio::test]
+async fn test_ipc_get_ca_rating_roundtrip() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "randbotd_ipc_rating_test_{}",
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let socket_path = temp_dir.join("randbotd.sock");
+
+    let phonebook = test_phonebook();
+    let db = Arc::new(Database::open(&temp_dir).expect("Database must open"));
+    let server = IpcServer::with_db(socket_path.clone(), Arc::clone(&phonebook), Arc::clone(&db));
+    let handle = server.spawn();
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let send_cmd = |cmd: IpcCommand| {
+        let sp = socket_path.clone();
+        async move {
+            let stream = UnixStream::connect(&sp)
+                .await
+                .expect("Failed to connect to IPC socket");
+            let (reader, mut writer) = stream.into_split();
+            let cmd_line = serde_json::to_string(&cmd).unwrap() + "\n";
+            writer.write_all(cmd_line.as_bytes()).await.unwrap();
+
+            let mut buf_reader = BufReader::new(reader);
+            let mut resp_line = String::new();
+            buf_reader.read_line(&mut resp_line).await.unwrap();
+            serde_json::from_str::<IpcResponse>(&resp_line).unwrap()
+        }
+    };
+
+    // 1. Publish CA
+    let pub_resp = send_cmd(IpcCommand::PublishCa {
+        ca_id_hex: None,
+        common_name: "Rating IPC CA".to_string(),
+        organization: Some("The Random Consortium".to_string()),
+        organizational_unit: None,
+        locality: None,
+        state_or_province: None,
+        country: Some("ES".to_string()),
+        email: None,
+        is_intermediate: false,
+        path_len_constraint: None,
+        is_draft: Some(false),
+        supported_domain_networks: Some(vec![DomainNetworkType::Clearnet]),
+        permitted_subtrees: None,
+    })
+    .await;
+
+    let ca_id_hex = match pub_resp {
+        IpcResponse::Ok { message } => {
+            let prefix = "ca_id `";
+            let start = message.find(prefix).unwrap() + prefix.len();
+            let end = message[start..].find('`').unwrap() + start;
+            message[start..end].to_string()
+        }
+        _ => panic!("Expected PublishCa Ok, got {:?}", pub_resp),
+    };
+
+    // 2. Query GetCaRating
+    let rating_resp = send_cmd(IpcCommand::GetCaRating {
+        ca_id_hex: ca_id_hex.clone(),
+    })
+    .await;
+
+    match rating_resp {
+        IpcResponse::Ok { message } => {
+            assert!(message.contains("\"rating\": 50.0"));
+            assert!(message.contains("\"delta\": 50.0"));
+            assert!(message.contains("\"active_domains_count\": 0"));
+            assert!(message.contains("Rating IPC CA"));
+        }
+        _ => panic!("Expected GetCaRating Ok, got {:?}", rating_resp),
+    }
+
+    handle.abort();
+    let _ = std::fs::remove_dir_all(temp_dir);
+}

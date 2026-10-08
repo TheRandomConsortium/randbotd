@@ -366,10 +366,12 @@ pub fn calculate_vote_difficulty(active_votes: usize, revisions_on_domain: usize
     PowEngine::calculate_logarithmic_difficulty(DEFAULT_BASE_DIFFICULTY, active_votes, 2, penalty)
 }
 
+pub mod ca_rating;
 pub mod consensus;
 pub mod lazy;
 pub mod ponderation;
 
+pub use ca_rating::CaRatingEvaluation;
 pub use consensus::{ConsensusDirection, DomainConsensus, DomainConsensusCache};
 pub use lazy::{
     calculate_dynamic_delta, evaluate_domain_trust_with_weights, DomainTrustEvaluation,
