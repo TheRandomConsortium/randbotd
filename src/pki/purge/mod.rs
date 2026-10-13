@@ -374,6 +374,12 @@ pub fn validate_domain_name(domain: &str) -> Result<(), String> {
                 label
             ));
         }
+        if !label.is_ascii() {
+            return Err(format!(
+                "Domain label `{}` contains non-ASCII characters. Internationalized Domain Names (IDNs) must be converted to ASCII Punycode (e.g. `xn--...` per RFC 5891)",
+                label
+            ));
+        }
         if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return Err(format!("Domain contains invalid characters: `{}`", label));
         }

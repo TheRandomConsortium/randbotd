@@ -330,3 +330,33 @@ fn test_domain_purge_extra_nonce_and_retrocompatibility() {
     // Must default to 0!
     assert_eq!(deserialized.evidence.extra_nonce, 0);
 }
+
+#[test]
+fn test_validate_domain_name_punycode_and_ascii_enforcement() {
+    // 1. Valid pure ASCII domain passes
+    assert!(validate_domain_name("example.org").is_ok());
+
+    // 2. Valid Punycode A-label passes
+    assert!(validate_domain_name("xn--randm-cka.org").is_ok());
+
+    // 3. Raw Unicode IDN fails with explicit Punycode guidance
+    let err_unicode = validate_domain_name("randºm.org").unwrap_err();
+    assert!(
+        err_unicode.contains("contains non-ASCII characters"),
+        "Expected non-ASCII guidance, got: {}",
+        err_unicode
+    );
+    assert!(
+        err_unicode.contains("Punycode"),
+        "Expected mention of Punycode, got: {}",
+        err_unicode
+    );
+
+    // 4. Invalid ASCII character (e.g. underscore) fails with invalid character error
+    let err_underscore = validate_domain_name("rand_om.org").unwrap_err();
+    assert!(
+        err_underscore.contains("Domain contains invalid characters"),
+        "Expected invalid characters error, got: {}",
+        err_underscore
+    );
+}
