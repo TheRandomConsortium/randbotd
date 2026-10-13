@@ -113,6 +113,10 @@ impl Database {
                 revisions_on_domain,
             )?;
 
+            if let Ok(mut c_idx) = self.cluster_index.write() {
+                c_idx.insert_or_update_vote(&vote.voter_pubkey, &vote.domain, vote.action);
+            }
+
             store.insert(vote_id, vote);
 
             store

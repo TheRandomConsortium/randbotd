@@ -367,11 +367,17 @@ pub fn calculate_vote_difficulty(active_votes: usize, revisions_on_domain: usize
 }
 
 pub mod ca_rating;
+pub mod cluster;
 pub mod consensus;
 pub mod lazy;
 pub mod ponderation;
 
 pub use ca_rating::CaRatingEvaluation;
+pub use cluster::{
+    ClusterEngine, ClusterJob, ClusterPenaltyBreakdown, ClusterSimilarityResult,
+    ClusterWorkerHandle, InvertedVoteIndex, DEFAULT_CLUSTER_DAMPING_FACTOR,
+    DEFAULT_CLUSTER_SIMILARITY_THRESHOLD,
+};
 pub use consensus::{ConsensusDirection, DomainConsensus, DomainConsensusCache};
 pub use lazy::{
     calculate_dynamic_delta, evaluate_domain_trust_with_weights, DomainTrustEvaluation,

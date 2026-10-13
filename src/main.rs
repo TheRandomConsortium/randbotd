@@ -218,6 +218,14 @@ async fn main() {
         }
     };
 
+    // 4.1.1. Spawn Asynchronous Background Cluster Worker (REP-07)
+    let cluster_worker = crypto::vote::cluster::ClusterWorkerHandle::spawn(
+        db.cluster_index().clone(),
+        shared_phonebook.clone(),
+        64,
+    );
+    db.set_cluster_worker(cluster_worker);
+
     // 4.2. Spawn Local Daemon IPC Control Server (NET-08)
     let (broadcast_tx, mut broadcast_rx) = tokio::sync::mpsc::unbounded_channel();
     let ipc_socket_path = base_state_dir.join("randbotd.sock");

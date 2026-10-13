@@ -358,11 +358,33 @@ impl Database {
             target_concentration_hhi: hhi.clamp(0.0, 1.0),
         };
 
+        let prior_score = phonebook
+            .and_then(|pb| pb.read().ok())
+            .map(|pb| pb.get_peer_ponderation(voter_pubkey))
+            .unwrap_or(50);
+
         let breakdown = PonderationEngine::compute_score(&inputs);
 
         if let Some(pb_lock) = phonebook {
             if let Ok(mut pb) = pb_lock.write() {
                 pb.update_peer_ponderation(voter_pubkey, breakdown.final_score);
+            }
+        }
+
+        // REP-07: Heuristic Cluster Propagation upon significant demotion
+        if breakdown.final_score < prior_score
+            && (prior_score - breakdown.final_score)
+                >= crate::crypto::vote::cluster::MIN_DEMOTION_TRIGGER_DELTA
+        {
+            if let Some(latest_v) = all_votes.last() {
+                let job = crate::crypto::vote::cluster::ClusterJob {
+                    trigger_voter: *voter_pubkey,
+                    domain: latest_v.domain.clone(),
+                    old_ponderation: prior_score,
+                    new_ponderation: breakdown.final_score,
+                    timestamp: latest_v.timestamp,
+                };
+                self.dispatch_cluster_job(job, phonebook);
             }
         }
 

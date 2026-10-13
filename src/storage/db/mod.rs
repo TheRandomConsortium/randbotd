@@ -3,7 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 pub mod merkle;
 pub mod subtables;
@@ -51,6 +51,8 @@ pub struct Database {
     policy_store: RwLock<std::collections::HashMap<[u8; 32], crate::pki::swarm::CaCustodianPolicy>>,
     vote_store: RwLock<std::collections::HashMap<[u8; 32], crate::crypto::vote::VoteRecord>>,
     distrust_store: RwLock<std::collections::HashMap<[u8; 32], u32>>,
+    cluster_index: Arc<RwLock<crate::crypto::vote::cluster::InvertedVoteIndex>>,
+    cluster_worker: RwLock<Option<crate::crypto::vote::cluster::ClusterWorkerHandle>>,
 }
 
 #[allow(dead_code)]
@@ -122,7 +124,13 @@ impl Database {
         let loaded_rotations = ca_subtable::load_hex_map_from_disk(&rotation_file_path)?;
         let loaded_custodians = ca_subtable::load_hex_map_from_disk(&custodians_file_path)?;
         let loaded_policies = ca_subtable::load_hex_map_from_disk(&policies_file_path)?;
-        let loaded_votes = ca_subtable::load_hex_map_from_disk(&vote_file_path)?;
+        let loaded_votes: std::collections::HashMap<[u8; 32], crate::crypto::vote::VoteRecord> =
+            ca_subtable::load_hex_map_from_disk(&vote_file_path)?;
+
+        let mut cluster_index = crate::crypto::vote::cluster::InvertedVoteIndex::new();
+        for vote in loaded_votes.values() {
+            cluster_index.insert_or_update_vote(&vote.voter_pubkey, &vote.domain, vote.action);
+        }
 
         Ok(Self {
             db_file_path,
@@ -150,7 +158,46 @@ impl Database {
             policy_store: RwLock::new(loaded_policies),
             vote_store: RwLock::new(loaded_votes),
             distrust_store: RwLock::new(std::collections::HashMap::new()),
+            cluster_index: Arc::new(RwLock::new(cluster_index)),
+            cluster_worker: RwLock::new(None),
         })
+    }
+
+    /// Returns a reference to the in-memory inverted vote cluster index (REP-07)
+    pub fn cluster_index(&self) -> &Arc<RwLock<crate::crypto::vote::cluster::InvertedVoteIndex>> {
+        &self.cluster_index
+    }
+
+    /// Attaches an asynchronous background cluster worker handle (REP-07)
+    pub fn set_cluster_worker(&self, worker: crate::crypto::vote::cluster::ClusterWorkerHandle) {
+        if let Ok(mut lock) = self.cluster_worker.write() {
+            *lock = Some(worker);
+        }
+    }
+
+    /// Dispatches a cluster ponderation job to the async worker, or falls back to synchronous processing
+    pub fn dispatch_cluster_job(
+        &self,
+        job: crate::crypto::vote::cluster::ClusterJob,
+        phonebook: Option<&RwLock<crate::net::phonebook::Phonebook>>,
+    ) {
+        if let Ok(worker_lock) = self.cluster_worker.read() {
+            if let Some(ref worker) = *worker_lock {
+                if worker.submit_job(job.clone()) {
+                    return;
+                }
+            }
+        }
+
+        if let Ok(idx_guard) = self.cluster_index.read() {
+            let _ = crate::crypto::vote::cluster::ClusterEngine::process_cluster_job(
+                &job,
+                &idx_guard,
+                phonebook,
+                crate::crypto::vote::cluster::DEFAULT_CLUSTER_SIMILARITY_THRESHOLD,
+                crate::crypto::vote::cluster::DEFAULT_CLUSTER_DAMPING_FACTOR,
+            );
+        }
     }
 
     fn persist_and_append_entry(
